@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "WebWorker"],
+    "types": ["@cloudflare/workers-types", "node", "vitest/globals"]
+  },
+  "include": ["src/server/**/*.ts", "src/crawl/**/*.ts", "scripts/**/*.ts", "tests/server/**/*.ts", "tests/crawl/**/*.ts", "tests/config/**/*.ts", "vitest.worker.config.ts"]
+}
