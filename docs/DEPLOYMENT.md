@@ -2,7 +2,7 @@
 
 本项目使用 Cloudflare Workers 托管网站与 API、D1 存储试卷数据、私有 Workers KV 保存管理员上传的少量 PDF、Workers Builds 连接 GitHub `main` 自动部署。首期使用 `workers.dev` 地址。本文区分构建时配置、Worker 运行时配置、KV namespace 和 GitHub Actions Secrets；四者不能互相替代。R2 当前没有启用。
 
-## 本次上线记录（2026-10-04）
+## 本次上线记录（2026-10-04 至 2026-10-05）
 
 - 生产地址：[https://ceepp.chengjinxuetang.workers.dev](https://ceepp.chengjinxuetang.workers.dev)。已发布 `ceepp` Worker，绑定 `ceepp` D1；首次自动构建发布版本为 `69a3d496-1b0c-4d22-8936-0d078b2ba552`。
 - D1 已应用 `0001_init.sql`。实测首页正常打开，`GET /api/papers` 返回 HTTP 200 和空列表；首批试卷尚未审核发布，空列表是预期结果。
@@ -11,7 +11,11 @@
 
 ### PDF 与新分类版本的发布状态
 
-本版本新增 `0002_taxonomy_and_uploads.sql`、`PAPER_FILES` KV binding、PDF 上传/预览/下载接口，以及命题范围、科目角色、资料类型和多地区分类。迁移会把旧全国卷保守识别为全国统一命题；旧“地区卷”字段无法证明是省级自主命题还是联考，因此迁为“待核对”，同时规范常见科目和省级行政区别名并去重，避免历史数据被错误定性。旧 urongda/ctfile 链接会回填为“网盘分享”；不属于 31 个支持地区的旧值会从业务关联中移出并保存在 `legacy_region_review` 审计表，需管理员核对，不能静默重新合并。2026-10-05 已创建私有 KV namespace `ceepp-paper-files`（ID `18332fafefe24709aa6cc132a3dc18a0`）；它只有在代码推送且对应 Workers Build 成功后才算上线，在本文写入新的构建编号和提交 SHA 之前，不应把这些功能当作已发布。
+本版本新增 `0002_taxonomy_and_uploads.sql`、`PAPER_FILES` KV binding、PDF 上传/预览/下载接口，以及命题范围、科目角色、资料类型和多地区分类。迁移会把旧全国卷保守识别为全国统一命题；旧“地区卷”字段无法证明是省级自主命题还是联考，因此迁为“待核对”，同时规范常见科目和省级行政区别名并去重，避免历史数据被错误定性。旧 urongda/ctfile 链接会回填为“网盘分享”；不属于 31 个支持地区的旧值会从业务关联中移出并保存在 `legacy_region_review` 审计表，需管理员核对，不能静默重新合并。
+
+2026-10-05 已创建私有 KV namespace `ceepp-paper-files`（ID `18332fafefe24709aa6cc132a3dc18a0`），未创建或启用 R2。提交 [`890bdc4`](https://github.com/chengjinxt/CEEPP/commit/890bdc4df914fa4ce15683cb4e19bb95ef6f7408) 推送到 `main` 后，[自动构建 #b9fbfee8](https://dash.cloudflare.com/ca11979ca46285840cb4dad01152679c/workers/services/view/ceepp/production/builds/b9fbfee8-1b95-48d3-93e3-a394097eab04)于 1 分 14 秒内完成初始化、拉取、依赖安装、`pnpm lint && pnpm test && pnpm build` 及 `pnpm deploy`，五个阶段均显示成功。Deploy 脚本先完成远程 D1 migration，再将 `PAPER_FILES` 绑定到上述 KV namespace；本地 dry-run 也确认产物的 `r2_buckets` 为空。
+
+线上冒烟检查结果：匿名首页和 `GET /api/papers` 均为 HTTP 200，未登录 `/admin` 为 HTTP 302 并跳转 Cloudflare Access。管理员创建了未发布的测试草稿（paper ID `3`），上传一份 1.7 KB、无第三方内容的合成 PDF 后，后台显示“PDF 已上传，可在线查看”，生成 resource ID `4` 的预览和下载地址；测试草稿未公开发布。当前自动化浏览器的新标签访问被本机保存的浏览器权限拦截，因此仅确认上传、KV 写入结果和预览地址生成，PDF 在线渲染仍应由管理员在现有后台页面点击“在线查看”完成一次人工确认。
 
 ## 访问地址与管理员操作
 
