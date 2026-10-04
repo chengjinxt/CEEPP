@@ -1,6 +1,7 @@
 import type { Candidate } from './types';
 import { classifyFile, fileFormat, inferSeries, regionsInText } from './classify';
 import { fetchAllowedText } from './robots';
+import { normalizeSubjectRole, seriesRegions } from '../shared/exam';
 
 interface GitTree {
   truncated: boolean;
@@ -20,15 +21,21 @@ export function parseGitHubTree(payload: GitTree): Candidate[] {
     const classification = classifyFile(filename);
     if (!classification) return [];
     const inferred = inferSeries(filename);
+    const subjectRole = normalizeSubjectRole('数学');
     const regions = filename.match(/[（(]([^）)]+)[）)]/)?.[1];
+    const inferredRegions = regions ? regionsInText(regions) : inferred.regions;
+    const presetRegions = inferred.series ? seriesRegions(year, inferred.series, subjectRole) : [];
     const path = item.path.split('/').map(encodeURIComponent).join('/');
     return [{
       source_key: 'gaokaomath', external_key: item.path, title: filename, year,
       scope: inferred.scope, series: inferred.series, subject: '数学',
-      regions_json: JSON.stringify(regions ? regionsInText(regions) : inferred.regions),
+      regions_json: JSON.stringify(presetRegions.length ? presetRegions : inferredRegions),
       format: fileFormat(filename),
       resource_url: `https://raw.githubusercontent.com/deekur/gaokaomath/main/${path}`,
       source_url: `https://github.com/deekur/gaokaomath/blob/main/${path}`,
+      origin_type: inferred.scope === 'national' ? 'national' : inferred.scope === 'regional' ? 'provincial' : 'unknown',
+      subject_role: subjectRole,
+      resource_kind: 'question',
       classification: inferred.scope ? classification : 'uncertain',
       raw_json: JSON.stringify({ path: item.path, sha: item.sha ?? null }),
     } satisfies Candidate];

@@ -23,6 +23,7 @@ describe('crawler safeguards', () => {
       title: '2025北京.pdf', year: 2025, scope: 'regional', series: '北京卷',
       subject: '数学', regions_json: '["北京"]', format: 'PDF',
       resource_url: 'https://example.org/paper.pdf', source_url: 'https://example.org/source',
+      origin_type: 'provincial', subject_role: 'unified', resource_kind: 'question',
       classification: 'ordinary', raw_json: '{"path":"普通高考/2025/2025北京.pdf"}',
     };
     let request: Request | undefined;
@@ -38,8 +39,12 @@ describe('crawler safeguards', () => {
     const body = await request!.json() as { batch: Array<{ sql: string; params: string[] }> };
     expect(body.batch).toHaveLength(1);
     expect(body.batch[0]!.params).toContain('2025北京.pdf');
+    expect(body.batch[0]!.params).toContain('provincial');
+    expect(body.batch[0]!.params).toContain('unified');
+    expect(body.batch[0]!.params).toContain('question');
     expect(body.batch[0]!.params).not.toContain('secret');
     expect(body.batch[0]!.sql).toContain('ON CONFLICT(source_key, external_key) DO UPDATE');
+    expect(body.batch[0]!.sql).toMatch(/origin_type, subject_role, resource_kind/);
     expect(body.batch[0]!.sql).not.toMatch(/review_status\s*=/);
     expect(body.batch[0]!.sql).not.toMatch(/paper_id\s*=/);
   });

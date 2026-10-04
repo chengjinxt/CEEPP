@@ -3,11 +3,13 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { crawlGitHub } from './github';
 import { crawlUrongda } from './urongda';
+import { crawlJhcee } from './jhcee';
 import { upsertCandidates } from './persist';
 
 interface Options {
   github: () => Promise<Candidate[]>;
   urongda: () => Promise<Candidate[]>;
+  jhcee: () => Promise<Candidate[]>;
   persist: (items: Candidate[]) => Promise<number>;
   dryRun: boolean;
 }
@@ -15,19 +17,21 @@ interface Options {
 export async function runCrawl(options: Options): Promise<{
   discovered: number;
   stored: number;
-  bySource: { gaokaomath: number; urongda: number };
+  bySource: { gaokaomath: number; urongda: number; jhcee: number };
   failures: string[];
 }> {
-  const sources = await Promise.allSettled([options.github(), options.urongda()]);
+  const sourceNames = ['gaokaomath', 'urongda', 'jhcee'] as const;
+  const sources = await Promise.allSettled([options.github(), options.urongda(), options.jhcee()]);
   const candidates: Candidate[] = [];
   const failures: string[] = [];
-  const bySource = { gaokaomath: 0, urongda: 0 };
+  const bySource = { gaokaomath: 0, urongda: 0, jhcee: 0 };
   for (const [index, result] of sources.entries()) {
+    const sourceName = sourceNames[index]!;
     if (result.status === 'fulfilled') {
-      bySource[index === 0 ? 'gaokaomath' : 'urongda'] = result.value.length;
+      bySource[sourceName] = result.value.length;
       candidates.push(...result.value);
     }
-    else failures.push(`${index === 0 ? 'gaokaomath' : 'urongda'}: ${String(result.reason instanceof Error ? result.reason.message : result.reason)}`);
+    else failures.push(`${sourceName}: ${String(result.reason instanceof Error ? result.reason.message : result.reason)}`);
   }
   let stored = 0;
   if (!options.dryRun && candidates.length) {
@@ -52,10 +56,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const summary = await runCrawl({
       github: () => crawlGitHub({ token: process.env.GITHUB_TOKEN }),
       urongda: () => crawlUrongda(),
+      jhcee: () => crawlJhcee(),
       persist: (items) => upsertCandidates(items, { accountId: accountId!, databaseId: databaseId!, apiToken: apiToken! }),
       dryRun,
     });
-    console.info(`Candidates found: ${summary.discovered} (gaokaomath: ${summary.bySource.gaokaomath}; urongda: ${summary.bySource.urongda}); D1 processed: ${summary.stored}`);
+    console.info(`Candidates found: ${summary.discovered} (gaokaomath: ${summary.bySource.gaokaomath}; urongda: ${summary.bySource.urongda}; jhcee: ${summary.bySource.jhcee}); D1 processed: ${summary.stored}`);
     if (summary.failures.length) {
       for (const failure of summary.failures) console.error(failure);
       process.exitCode = 1;
