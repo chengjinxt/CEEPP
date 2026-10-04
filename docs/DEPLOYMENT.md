@@ -4,10 +4,10 @@
 
 ## 本次上线记录（2026-10-04）
 
-- 生产地址：[https://ceepp.chengjinxuetang.workers.dev](https://ceepp.chengjinxuetang.workers.dev)。已使用 Wrangler 发布 `ceepp` Worker（版本 `9006b366-caa5-48c9-8e54-3ae8aa02c972`），并绑定 `ceepp` D1。
+- 生产地址：[https://ceepp.chengjinxuetang.workers.dev](https://ceepp.chengjinxuetang.workers.dev)。已发布 `ceepp` Worker，绑定 `ceepp` D1；首次自动构建发布版本为 `69a3d496-1b0c-4d22-8936-0d078b2ba552`。
 - D1 已应用 `0001_init.sql`。实测首页正常打开，`GET /api/papers` 返回 HTTP 200 和空列表；首批试卷尚未审核发布，空列表是预期结果。
 - 未配置 Cloudflare Access 前，`/admin` 实测返回 HTTP 403。此时公开站可用，但管理员尚不能登录后台；必须完成下文第 2 节才能启用审核发布。
-- Cloudflare GitHub App 仅获准访问 `chengjinxt/CEEPP`，Worker 的 **Settings > Builds** 已连接该仓库的 `main`；Build command 为 `pnpm lint && pnpm test && pnpm build`，Deploy command 为 `pnpm deploy`，预览构建关闭。构建令牌 `ceepp-workers-builds-auto` 已缩减为当前账号的 D1 Edit 与 Workers Scripts Edit。首次自动构建仍须通过一次 `main` 推送验证，不能仅凭“已连接”认定自动部署成功。
+- Cloudflare GitHub App 仅获准访问 `chengjinxt/CEEPP`，Worker 的 **Settings > Builds** 已连接该仓库的 `main`；Build command 为 `pnpm lint && pnpm test && pnpm build`，Deploy command 为 `pnpm deploy`，预览构建关闭。构建令牌 `ceepp-workers-builds-auto` 已缩减为当前账号的 D1 Edit 与 Workers Scripts Edit。提交 `cc2f31c` 推送到 `main` 后，[首次自动构建 #242b54ea](https://dash.cloudflare.com/ca11979ca46285840cb4dad01152679c/workers/services/view/ceepp/production/builds/242b54ea-a201-4c6e-9f57-524fb8687586)的安装、lint、测试、构建、远程 D1 迁移检查与 Worker 发布全部成功；迁移日志为 `No migrations to apply!`，因为首次手动发布时已应用 `0001_init.sql`。
 
 ## 发布前核对
 
@@ -63,7 +63,7 @@ Cloudflare 自动生成的 Builds token 默认包含多项产品权限，不能�
 ## 3. 验收与后续自动发布
 
 1. 查看 Workers Builds 的 `main` 构建日志：lint、测试、Vite build、远程 D1 migration、Worker deploy 均应成功。D1 控制台应出现 `d1_migrations` 及业务表；迁移只需对同一数据库应用一次。
-2. 无痕窗口访问 Worker 根路径和 `/api/papers`，应能匿名打开；没有已发布试卷时列表为空是正常状态。访问 `/admin`、`/admin/papers` 及 `/admin/api/papers`，未登录应进入 Access 登录或被拒绝，不能看到后台数据。用被允许的邮箱登录后，后台应可打开。
+2. 无痕窗口访问 Worker 根路径和 `/api/papers`，应能匿名打开；没有已发布试卷时列表为空是正常状态。Access 启用前，Worker 返回的 JSON 403 只是默认拒绝，**不能证明**路径已受 Access 保护。完成第 2 节后，无痕访问 `/admin`、`/admin/papers` 及 `/admin/api/papers` 应出现 Access 登录、挑战或 Access 明确拒绝页；仅被允许的管理员登录后，后台才应打开。
 3. 核实任何非 `main` 分支都不会执行 `pnpm deploy` 或生产 D1 迁移。以后每次改动：本地测试通过 → 提交 → 推送 `main` → 查看 Builds 日志与站点。D1 迁移先于 Worker 发布；新增迁移要检查是否兼容当前线上代码。
 
 每周采集是另一条链路，由 [GitHub Actions](../.github/workflows/crawl.yml) 运行，不是 Workers Builds。要启用它，在 GitHub 仓库的 Actions Secrets 配置 `CLOUDFLARE_ACCOUNT_ID`、`CLOUDFLARE_D1_DATABASE_ID`、`CLOUDFLARE_API_TOKEN`；其中 D1 ID 必须与 `wrangler.jsonc` 中生产数据库的 ID 完全相同，否则采集会写入另一座数据库。这里应使用单独的、限定到该账号且具备 D1 Edit 的 token。采集只写待审核候选，不会自动公开。不要将这些值写入文档或提交到仓库。
