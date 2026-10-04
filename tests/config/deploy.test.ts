@@ -48,10 +48,12 @@ describe('production deployment gate', () => {
   });
 
   it('does not publish when a migration fails', async () => {
-    const run = vi.fn(async (_args: string[]) => { throw new Error('migration failed'); });
+    const run = vi.fn(async (args: string[]) => {
+      if (args[0] === 'd1') throw new Error('migration failed');
+    });
 
     await expect(runDeployment({ workersCi: true, branch: 'main' }, run))
       .rejects.toThrow('migration failed');
-    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls).toEqual([[['d1', 'migrations', 'apply', 'ceepp', '--remote']]]);
   });
 });

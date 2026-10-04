@@ -29,6 +29,8 @@ pnpm test
 pnpm build
 ```
 
+每次修改后的测试、Git 提交、Workers Builds 自动发布与线上验收步骤见[日常修改与发布流程](docs/DEPLOYMENT.md#日常修改本地验证与自动发布)；其中后台登录问题必须从首页点击入口验证，不能只在地址栏直接打开 `/admin`。
+
 公开 API 是 `GET /api/papers`（支持 `year`、`scope`、`region`、`subject`、`q`、`page`）和 `GET /api/papers/:id`。仅返回已发布试卷，供网站及后续小程序复用。管理员在 `/admin` 及其子路径审核候选、补录资源、发布或下架试卷。
 
 ## 首次上线（需 Cloudflare 和 GitHub 账号）

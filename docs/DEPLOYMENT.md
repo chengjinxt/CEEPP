@@ -82,9 +82,35 @@ Cloudflare 自动生成的 Builds token 默认包含多项产品权限，不能�
 
 1. 查看 Workers Builds 的 `main` 构建日志：lint、测试、Vite build、远程 D1 migration、Worker deploy 均应成功。D1 控制台应出现 `d1_migrations` 及业务表；迁移只需对同一数据库应用一次。
 2. 无痕窗口访问 Worker 根路径和 `/api/papers`，应能匿名打开；没有已发布试卷时列表为空是正常状态。当前 Access 已启用：无痕访问 `/admin`、`/admin/papers` 及 `/admin/api/papers` 应跳转 Access 登录、挑战或明确拒绝页；仅被允许的管理员登录后，后台才应打开。若只看到 Worker 返回的 JSON 403，**不能证明**路径已受 Access 保护，应核对第 2 节的应用路径配置。
-3. 核实任何非 `main` 分支都不会执行 `pnpm deploy` 或生产 D1 迁移。以后每次改动：本地测试通过 → 提交 → 推送 `main` → 查看 Builds 日志与站点。D1 迁移先于 Worker 发布；新增迁移要检查是否兼容当前线上代码。
+3. 核实任何非 `main` 分支都不会执行 `pnpm deploy` 或生产 D1 迁移。以后每次改动按下文的日常流程操作；新增迁移要检查是否兼容当前线上代码。
 
 每周采集是另一条链路，由 [GitHub Actions](../.github/workflows/crawl.yml) 运行，不是 Workers Builds。要启用它，在 GitHub 仓库的 Actions Secrets 配置 `CLOUDFLARE_ACCOUNT_ID`、`CLOUDFLARE_D1_DATABASE_ID`、`CLOUDFLARE_API_TOKEN`；其中 D1 ID 必须与 `wrangler.jsonc` 中生产数据库的 ID 完全相同，否则采集会写入另一座数据库。这里应使用单独的、限定到该账号且具备 D1 Edit 的 token。采集只写待审核候选，不会自动公开。不要将这些值写入文档或提交到仓库。
+
+## 日常修改、本地验证与自动发布
+
+以下流程适用于 GitHub `main` 与 Workers Builds 已连接后的每次改动。项目要求改动配套测试、全部验证通过后创建对应 Git commit。不要把“已推送 GitHub”当作“已上线”；只有与该提交对应的 Cloudflare 构建和部署成功，才算发布完成。
+
+1. **确认范围并修改。** 在仓库目录运行 `git rev-parse --show-toplevel` 和 `git status --short --branch`，记下已有的无关改动，不要覆盖或顺手提交。修复故障时先补能复现问题的回归测试，确认它因原故障失败，再做最小修改并确认测试转绿。修改 D1 schema 时新增迁移文件，不直接改生产库。
+2. **本地运行与验证。** 使用 Node.js 24 和 pnpm 11.19.0；已安装 nvm-windows 时先执行 `nvm use 24`，再用 `node --version`、`pnpm --version` 核对。首次运行或锁文件变化后执行 `pnpm install --frozen-lockfile`。首次建立本地 D1，或新增迁移文件后，先运行 `pnpm exec wrangler d1 migrations apply ceepp --local`，否则首页请求试卷表时可能报缺表。需要查看页面时再运行 `pnpm dev`，按终端给出的本地地址打开网站。提交前依次运行：
+
+   ```sh
+   pnpm lint
+   pnpm test
+   pnpm build
+   git diff --check
+   ```
+
+   `pnpm test` 包含浏览器端单元测试和 Worker 测试。本地开发服务没有生产环境的 Cloudflare Access 登录流程；在本地点击管理后台后看到未授权响应，不能据此判断线上 Access 配置是否正常。后台入口的导航行为由回归测试验证，真正的 Access 登录须在发布后用无痕浏览器验收。
+3. **只提交本次文件。** 确认当前分支为 `main`；其他分支先按项目流程把已验证的改动合入 `main`，不能直接部署生产。查看 `git diff --stat` 和 `git status --short`，明确文件范围；用 `git add --` 后面逐个列出本次文件，再运行 `git diff --cached --check` 与 `git diff --cached --stat` 核对。创建说明本次修改的 commit，并运行 `git push origin main`；不要用 `git add -A` 把本地笔记、密钥或其他无关文件带入提交。
+4. **确认自动构建与部署。** 打开 [ceepp 的 Cloudflare Builds](https://dash.cloudflare.com/ca11979ca46285840cb4dad01152679c/workers/services/view/ceepp/production/builds)，找到刚推送的 commit SHA，而非只看最新一行是否为绿色。展开该构建，确认 `pnpm lint && pnpm test && pnpm build` 和 `pnpm deploy` 都成功；Deploy 阶段应先完成远程 D1 迁移，再发布 Worker。本次没有新迁移时，`No migrations to apply!` 是正常结果。失败时读取该构建日志、修复并重新验证后再提交；不要跳过迁移直接手工发布。
+5. **线上验收。** 匿名访问[首页](https://ceepp.chengjinxuetang.workers.dev/)与 [`GET /api/papers`](https://ceepp.chengjinxuetang.workers.dev/api/papers)应正常。用未登录的新浏览器会话从**首页实际点击**页眉的“管理后台”入口，确认会进入 Cloudflare Access 登录流程；登录后应到 `/admin/candidates` 且后台接口能加载。页脚入口也要从首页点击验证；若要再次检查首次登录提示，需使用另一个隔离的未登录会话。不要只在地址栏直接输入 `/admin`，因为那无法覆盖前端链接拦截故障。已有 Access 会话时直接进入后台而不再显示登录页是正常现象。最后运行 `git status --short --branch`，确认本地提交已与 `origin/main` 同步。
+
+### 2026-10-04 管理后台入口修复实例
+
+- 故障：公开页的“管理后台”原为 Vue `RouterLink`，点击只切换前端路由，没有向 `/admin` 发起整页请求；首次后台 API 请求才遇到 Access 重定向，于是页面显示 `Failed to fetch`。在地址栏直接访问后台地址却能完成登录。
+- 修改：[App.vue](../src/client/App.vue) 的页眉和页脚入口改为原生 `<a href="/admin">`，让首次点击先由 Access 检查；后台内部路由保持不变。[导航回归测试](../tests/client/navigation.test.ts)覆盖两个入口不被 Vue Router 拦截。测试在修改前两项失败、修改后通过。
+- 本地验证：定向导航测试可运行 `pnpm exec vitest run tests/client/navigation.test.ts --config vitest.config.ts`；本次在 Codex 的 Windows 终端因 `pnpm exec` 未找到可执行文件，改用 `.\node_modules\.bin\vitest.cmd run tests/client/navigation.test.ts --config vitest.config.ts` 运行，结果 4/4。完整单元测试 35/35、Worker 测试 16/16、类型检查和 Vite 构建通过；`git diff --check` 通过。
+- 提交与发布：仅暂存 `src/client/App.vue`、`tests/client/navigation.test.ts`，运行 `git diff --cached --check` 后创建 [`c7a39bf`](https://github.com/chengjinxt/CEEPP/commit/c7a39bf357a7c637d016d854bbb50a5f04c4164f) 并执行 `git push origin main`。[Cloudflare 构建 #2edb398f](https://dash.cloudflare.com/ca11979ca46285840cb4dad01152679c/workers/services/view/ceepp/production/builds/2edb398f-18db-4c29-81e4-88904893056f)显示成功。线上首页已引用新前端资源；匿名请求 `/admin` 返回 Access 登录重定向（HTTP 302），`/api/papers` 返回 HTTP 200。无痕窗口点击入口并完成管理员交互式登录仍需按上一步人工确认。
 
 ## 常见故障
 
@@ -98,6 +124,7 @@ Cloudflare 自动生成的 Builds token 默认包含多项产品权限，不能�
 | 发布脚本提示只允许 `main` | 核对 Production branch 和 Builds 注入的 `WORKERS_CI_BRANCH`；不要在其他分支手工执行生产部署。 |
 | `/admin` 直接 403、没有登录页 | 核对 Access 应用是否覆盖根路径 `/admin`，Worker 运行时三个变量是否已配置；JWT 校验本身也会在配置错误时拒绝。 |
 | 登录后后台仍为 403 | 核对 `ACCESS_AUD`、团队域名、`ADMIN_EMAIL` 与登录身份的邮箱是否一致，且 `/admin` 与 `/admin/*` 属于同一 Access 应用。 |
+| 从首页点“管理后台”不显示登录，后台报 `Failed to fetch`；直接输入 `/admin` 却能登录 | 检查公开页入口是否使用原生 `<a href="/admin">` 发起整页请求，而非只切换 Vue 前端路由；再核对线上构建 SHA、Access 的 `/admin` 路径，并用未登录的新会话重试。 |
 | 首页也要求登录 | 误启用了 Worker 级或账号级 Access；应仅保护 `workers.dev` 主机的管理路径。 |
 | `/api/papers` 返回空列表 | 尚未有管理员审核并发布试卷；先检查管理后台和 D1，不要把采集候选直接公开。 |
 
