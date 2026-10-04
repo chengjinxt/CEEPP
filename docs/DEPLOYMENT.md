@@ -6,8 +6,26 @@
 
 - 生产地址：[https://ceepp.chengjinxuetang.workers.dev](https://ceepp.chengjinxuetang.workers.dev)。已发布 `ceepp` Worker，绑定 `ceepp` D1；首次自动构建发布版本为 `69a3d496-1b0c-4d22-8936-0d078b2ba552`。
 - D1 已应用 `0001_init.sql`。实测首页正常打开，`GET /api/papers` 返回 HTTP 200 和空列表；首批试卷尚未审核发布，空列表是预期结果。
-- 未配置 Cloudflare Access 前，`/admin` 实测返回 HTTP 403。此时公开站可用，但管理员尚不能登录后台；必须完成下文第 2 节才能启用审核发布。
+- Cloudflare Access 已启用：`CEEPP Admin` 应用只覆盖 `/admin` 和 `/admin/*`，Allow 策略只允许 `chengjinxuetang@hotmail.com`。Worker 运行时的团队域名、AUD 和管理员邮箱也已配置。未登录时实测 `/admin` 跳转 Access 登录（HTTP 302），首页及 `GET /api/papers` 仍返回 HTTP 200。启用 Access 前的 `/admin` HTTP 403 是历史记录，不再代表当前状态。
 - Cloudflare GitHub App 仅获准访问 `chengjinxt/CEEPP`，Worker 的 **Settings > Builds** 已连接该仓库的 `main`；Build command 为 `pnpm lint && pnpm test && pnpm build`，Deploy command 为 `pnpm deploy`，预览构建关闭。构建令牌 `ceepp-workers-builds-auto` 已缩减为当前账号的 D1 Edit 与 Workers Scripts Edit。提交 `cc2f31c` 推送到 `main` 后，[首次自动构建 #242b54ea](https://dash.cloudflare.com/ca11979ca46285840cb4dad01152679c/workers/services/view/ceepp/production/builds/242b54ea-a201-4c6e-9f57-524fb8687586)的安装、lint、测试、构建、远程 D1 迁移检查与 Worker 发布全部成功；迁移日志为 `No migrations to apply!`，因为首次手动发布时已应用 `0001_init.sql`。
+
+## 访问地址与管理员操作
+
+| 用途 | 地址 | 访问方式 |
+| --- | --- | --- |
+| 公开网站 | [ceepp.chengjinxuetang.workers.dev](https://ceepp.chengjinxuetang.workers.dev/) | 浏览器直接打开本站，无需登录；按年份、卷别、地区、科目筛选，进入试卷详情后打开资源。仅显示已发布试卷；第三方网盘或来源站的下载要求以资源页面为准。 |
+| 公开 API | [`GET /api/papers`](https://ceepp.chengjinxuetang.workers.dev/api/papers)、`GET /api/papers/:id` | 无需登录；列表支持 `year`、`scope`、`region`、`subject`、`q`、`page` 查询参数，详情中的 `:id` 替换为真实试卷 ID。只返回已发布试卷。 |
+| 管理后台 | [网站 `/admin`](https://ceepp.chengjinxuetang.workers.dev/admin) | 仅指定管理员登录。此入口先经过 Cloudflare Access，成功后转到 `/admin/candidates`。 |
+| 采集候选审核 | [网站 `/admin/candidates`](https://ceepp.chengjinxuetang.workers.dev/admin/candidates) | 审核采集候选，选择拒绝、创建草稿或合并到现有试卷；采集不会自动发布。 |
+| 试卷管理 | [网站 `/admin/papers`](https://ceepp.chengjinxuetang.workers.dev/admin/papers) | 补录或编辑试卷、地区及资源链接，核验后发布；也可下架。 |
+| Cloudflare 运维 | [ceepp Worker 控制台](https://dash.cloudflare.com/ca11979ca46285840cb4dad01152679c/workers/services/view/ceepp/production)、[Cloudflare 控制台](https://dash.cloudflare.com/) | 使用有该 Cloudflare 账号权限的身份登录；查看 Builds、D1、运行时变量。Access 应用及策略在 **Zero Trust > Access controls > Applications** 中管理。 |
+| 代码与每周采集 | [GitHub 仓库](https://github.com/chengjinxt/CEEPP)、[Actions](https://github.com/chengjinxt/CEEPP/actions) | 使用有仓库权限的 GitHub 账号查看提交、自动构建以外的每周采集工作流及其运行记录。 |
+
+管理员日常使用：在浏览器打开 `/admin`，按 Cloudflare Access 登录页提示选择 **Cloudflare** 身份提供商，使用 `chengjinxuetang@hotmail.com` 对应的 Cloudflare 账号完成验证；不要把 GitHub 登录或 GitHub App 授权误当成后台登录。Access 的 Allow 策略只允许此邮箱，Worker 还会校验令牌的签名、签发者、AUD 与邮箱。登录后先处理候选，再到试卷管理页检查资源并发布。`/admin/api/*` 是后台专用接口，同样受 Access 和 Worker 校验保护，不需要手工复制令牌调用。若当前试卷列表为空，表示尚无已审核发布的试卷，并非网站不可访问。
+
+术语：**AUD** 是 Application Audience（应用受众标识）。Cloudflare Access 为每个应用分配一个唯一 AUD；登录 JWT 的 `aud` 表明令牌适用于哪个应用。`ACCESS_AUD` 是 Worker 用来确认令牌确实发给 `CEEPP Admin` 的运行时变量，不是密码或 API Token；在 **Zero Trust > Access controls > Applications** 中打开 `CEEPP Admin`，查找 **Application Audience (AUD) Tag**（通常在 Additional settings）。[Cloudflare：验证 Access JWT](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/)
+
+**MFA** 是 Multi-Factor Authentication（多因素认证），即登录时在一种凭据之外再验证另一种因素，例如验证器动态码或安全密钥。本次配置时，CEEPP Access 应用的额外 MFA 策略显示为 Off；这与管理员的 Cloudflare 账号本身是否启用双重验证是两回事，不能互相推断。以后若要由 Access 强制独立 MFA，先在 Zero Trust 组织级启用，再在应用或策略级配置并重新验证登录流程。[Cloudflare：配置 Access MFA](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/mfa-requirements/)
 
 ## 发布前核对
 
@@ -54,16 +72,16 @@ Cloudflare 自动生成的 Builds token 默认包含多项产品权限，不能�
 
 | 变量 | 值的形式 |
 | --- | --- |
-| `ACCESS_TEAM_DOMAIN` | `https://<team>.cloudflareaccess.com` |
+| `ACCESS_TEAM_DOMAIN` | 当前为 `https://shrill-mouse-73fc.cloudflareaccess.com`；其他账号使用自己的团队域名 |
 | `ACCESS_AUD` | 上述同一 Access 应用的 AUD |
-| `ADMIN_EMAIL` | Allow 策略所允许的唯一管理员邮箱 |
+| `ADMIN_EMAIL` | 当前为 `chengjinxuetang@hotmail.com`，与 Allow 策略的唯一管理员邮箱一致 |
 
 这里是 Worker **运行时**变量，不是 Workers Builds 的 Build variables。仓库 [`wrangler.jsonc`](../wrangler.jsonc) 设置了 `keep_vars: true`，后续 Wrangler 部署会保留控制台设置的变量。管理请求在 Worker 内还要通过 Access JWT 签名、签发者、AUD 和邮箱校验；变量缺失时返回 403。[Access JWT 校验](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/)
 
 ## 3. 验收与后续自动发布
 
 1. 查看 Workers Builds 的 `main` 构建日志：lint、测试、Vite build、远程 D1 migration、Worker deploy 均应成功。D1 控制台应出现 `d1_migrations` 及业务表；迁移只需对同一数据库应用一次。
-2. 无痕窗口访问 Worker 根路径和 `/api/papers`，应能匿名打开；没有已发布试卷时列表为空是正常状态。Access 启用前，Worker 返回的 JSON 403 只是默认拒绝，**不能证明**路径已受 Access 保护。完成第 2 节后，无痕访问 `/admin`、`/admin/papers` 及 `/admin/api/papers` 应出现 Access 登录、挑战或 Access 明确拒绝页；仅被允许的管理员登录后，后台才应打开。
+2. 无痕窗口访问 Worker 根路径和 `/api/papers`，应能匿名打开；没有已发布试卷时列表为空是正常状态。当前 Access 已启用：无痕访问 `/admin`、`/admin/papers` 及 `/admin/api/papers` 应跳转 Access 登录、挑战或明确拒绝页；仅被允许的管理员登录后，后台才应打开。若只看到 Worker 返回的 JSON 403，**不能证明**路径已受 Access 保护，应核对第 2 节的应用路径配置。
 3. 核实任何非 `main` 分支都不会执行 `pnpm deploy` 或生产 D1 迁移。以后每次改动：本地测试通过 → 提交 → 推送 `main` → 查看 Builds 日志与站点。D1 迁移先于 Worker 发布；新增迁移要检查是否兼容当前线上代码。
 
 每周采集是另一条链路，由 [GitHub Actions](../.github/workflows/crawl.yml) 运行，不是 Workers Builds。要启用它，在 GitHub 仓库的 Actions Secrets 配置 `CLOUDFLARE_ACCOUNT_ID`、`CLOUDFLARE_D1_DATABASE_ID`、`CLOUDFLARE_API_TOKEN`；其中 D1 ID 必须与 `wrangler.jsonc` 中生产数据库的 ID 完全相同，否则采集会写入另一座数据库。这里应使用单独的、限定到该账号且具备 D1 Edit 的 token。采集只写待审核候选，不会自动公开。不要将这些值写入文档或提交到仓库。

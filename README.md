@@ -2,9 +2,18 @@
 
 首期收录普通高考历年全科试卷。访客可按年份、卷别、适用地区、科目和名称查找已发布试卷，并打开 PDF、HTML 或网盘资源；采集结果只进入待审核队列，不会自动公开。前台与后台使用 Vue 3，API 运行在 Cloudflare Worker，数据存于 D1。
 
+## 在线访问
+
+- 公开网站：[https://ceepp.chengjinxuetang.workers.dev/](https://ceepp.chengjinxuetang.workers.dev/)，浏览本站已发布资料无需登录；第三方网盘或来源站的下载要求以资源页面为准。
+- 管理后台：[https://ceepp.chengjinxuetang.workers.dev/admin](https://ceepp.chengjinxuetang.workers.dev/admin)，仅限指定管理员通过 Cloudflare Access 登录；登录后进入采集候选审核页。
+
+公开 API、试卷管理入口、管理员登录步骤及 AUD/MFA 说明见[发布与访问指南](docs/DEPLOYMENT.md#访问地址与管理员操作)。
+
 ## 本地运行
 
 需要 Node.js 24、pnpm 11。首次运行：
+
+如果使用 nvm-windows，先用 `nvm list` 检查本机版本；没有 Node 24 时运行 `nvm install 24`，再运行 `nvm use 24` 和 `node --version` 确认版本。nvm 不会自动安装 pnpm，仍需准备 pnpm 11。
 
 ```sh
 pnpm install --frozen-lockfile

@@ -118,6 +118,13 @@ describe('public paper API', () => {
 })
 
 describe('admin paper and candidate API', () => {
+  it('blocks every documented admin entry without Access while keeping the public API open', async () => {
+    for (const path of ['/admin', '/admin/candidates', '/admin/papers', '/admin/api/papers', '/admin/api/candidates']) {
+      expect((await worker.fetch(request(path), env)).status).toBe(403)
+    }
+    expect((await worker.fetch(request('/api/papers'), env)).status).toBe(200)
+  })
+
   it('denies a missing or forged Access JWT before any management read or write', async () => {
     expect((await worker.fetch(request('/admin/api/papers'), env)).status).toBe(403)
     const forged = request('/admin/api/papers', 'POST', mathPaper)
