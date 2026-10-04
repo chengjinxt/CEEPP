@@ -12,7 +12,7 @@ pnpm exec wrangler d1 migrations apply ceepp --local
 pnpm dev
 ```
 
-本地 D1 与生产 D1 分离。`/admin/*` 需要有效的 Cloudflare Access JWT；本地无令牌时会拒绝管理操作。可运行以下检查：
+本地 D1 与生产 D1 分离。`/admin` 及其子路径需要有效的 Cloudflare Access JWT；本地无令牌时会拒绝管理操作。可运行以下检查：
 
 ```sh
 pnpm lint
@@ -20,18 +20,13 @@ pnpm test
 pnpm build
 ```
 
-公开 API 是 `GET /api/papers`（支持 `year`、`scope`、`region`、`subject`、`q`、`page`）和 `GET /api/papers/:id`。仅返回已发布试卷，供网站及后续小程序复用。管理员在 `/admin/*` 审核候选、补录资源、发布或下架试卷。
+公开 API 是 `GET /api/papers`（支持 `year`、`scope`、`region`、`subject`、`q`、`page`）和 `GET /api/papers/:id`。仅返回已发布试卷，供网站及后续小程序复用。管理员在 `/admin` 及其子路径审核候选、补录资源、发布或下架试卷。
 
 ## 首次上线（需 Cloudflare 和 GitHub 账号）
 
-1. 在 Cloudflare 建立名为 `ceepp` 的 D1 数据库，将其真实 UUID 写入 [`wrangler.jsonc`](wrangler.jsonc) 的 `database_id`，替换仓库中的全零占位值。切勿使用占位值部署。启用免费的 `workers.dev` 子域。
-2. 创建名为 `ceepp` 的 Worker，并将本仓库连接到 Workers Builds。生产分支选择 `main`，关闭非生产分支 Preview（或保留默认 Preview 命令，**不能**设为 `pnpm deploy`）。Build variables 设置 `NODE_VERSION=24`、`PNPM_VERSION=11.19.0`。Build command 设为 `pnpm lint && pnpm test && pnpm build`，Deploy command 设为 `pnpm deploy`。连接 Worker 的名称必须与 Wrangler 的 `name` 一致。
-3. Workers Builds 使用的 API token 必须有 Workers 部署权限及账号级 **D1 Edit** 权限；默认自动生成的构建 token 不包含 D1 权限，不能执行生产迁移。将有权限的自定义 token 配置为 Workers Builds 的 API token，不要提交到 Git。
-4. 首次 Worker 已有 `workers.dev` 地址后，在 Zero Trust > Access > Applications 建立 self-hosted 应用，只保护 `ceepp.<你的子域>.workers.dev/admin` 及其子路径，Allow 策略只列出一名管理员的邮箱。不要保护整个 Worker，否则公开目录也会要求登录。记下该 Access 应用的 AUD 与团队域名。
-5. 在 Worker 的 Settings > Variables & Secrets 配置运行时 `ACCESS_TEAM_DOMAIN`（如 `https://team.cloudflareaccess.com`）、`ACCESS_AUD`（上述应用 AUD）、`ADMIN_EMAIL`（允许的唯一邮箱）。`keep_vars` 会保留控制台配置的变量。未正确配置时后台应拒绝访问；写接口还会校验 Access JWT 签名、受众与管理员邮箱。
-6. 推送到 `main` 后，Workers Builds 先执行 lint、测试和构建，再按顺序执行远程 D1 迁移与 Worker 发布。迁移失败即停止发布。部署脚本会拒绝任何非 `main` 分支写生产库，包括本地手动执行。生产地址形如 `https://ceepp.<你的子域>.workers.dev`。
+完整操作、验收与故障排查见 [发布与自动部署指南](docs/DEPLOYMENT.md)。当前 Cloudflare 账号已创建 `ceepp` D1；上线前需核对其真实 ID 与 [`wrangler.jsonc`](wrangler.jsonc) 的绑定一致。Workers Builds 只部署 `main`：Build command 为 `pnpm lint && pnpm test && pnpm build`，Deploy command 为 `pnpm deploy`，非生产 Preview 关闭。构建 token 需要 D1 Edit 才能先迁移、再发布 Worker。
 
-这些账号侧设置和真实数据库 UUID 无法从仓库自动生成；完成后可在 Workers Builds 日志确认首次发布。不要把 Cloudflare token 或 `.dev.vars` 提交到版本库。
+后台只在同一个 Cloudflare Access 应用中保护 `/admin` 和 `/admin/*`，公开站与 `/api/*` 保持匿名可访问。账号侧的 Access 设置、运行时变量和 GitHub Actions Secrets 均须按指南配置；不要把 API token 或 `.dev.vars` 提交到版本库。
 
 ## 采集与审核
 

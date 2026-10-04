@@ -14,7 +14,7 @@
     {
       "binding": "DB",
       "database_name": "ceepp",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "336ace7b-b8bf-49fe-9e1e-673822d49e7e",
       "migrations_dir": "migrations"
     }
   ]

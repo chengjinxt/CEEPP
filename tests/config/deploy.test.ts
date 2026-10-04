@@ -1,7 +1,18 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { runDeployment } from '../../scripts/deploy';
 
 describe('production deployment gate', () => {
+  it('binds the production Worker to a provisioned D1 database', () => {
+    const config = JSON.parse(readFileSync(new URL('../../wrangler.jsonc', import.meta.url), 'utf8')) as {
+      d1_databases: Array<{ binding: string; database_name: string; database_id: string }>;
+    };
+
+    expect(config.d1_databases).toHaveLength(1);
+    expect(config.d1_databases[0]).toMatchObject({ binding: 'DB', database_name: 'ceepp' });
+    expect(config.d1_databases[0].database_id).toBe('336ace7b-b8bf-49fe-9e1e-673822d49e7e');
+  });
+
   it('refuses to touch production D1 from a non-main Workers Build', async () => {
     const run = vi.fn(async (_args: string[]) => {});
 
