@@ -1,11 +1,7 @@
 import type { Candidate } from './types';
+import { EXAM_REGIONS, normalizeSeries } from '../shared/exam';
 
-const regions = [
-  '北京', '天津', '上海', '重庆', '河北', '山西', '辽宁', '吉林', '黑龙江',
-  '江苏', '浙江', '安徽', '福建', '江西', '山东', '河南', '湖北', '湖南',
-  '广东', '海南', '四川', '贵州', '云南', '陕西', '甘肃', '青海', '台湾',
-  '内蒙古', '广西', '西藏', '宁夏', '新疆', '香港', '澳门',
-];
+const regions = [...EXAM_REGIONS];
 
 export function fileFormat(name: string): string | null {
   const extension = name.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
@@ -40,11 +36,8 @@ export function inferSeries(text: string): {
     .replace(/[文理]$/, '').trim();
   const national = /全国|新课标|新高考|大纲|旧课程|外语小语种/.test(short);
   if (national) {
-    const match = short.match(/全国\s*([12一二ⅠⅡ])/);
-    const number = match?.[1];
-    const series = number
-      ? `全国${/[1一Ⅰ]/.test(number) ? '一' : '二'}卷`
-      : short.endsWith('卷') ? short : `${short}卷`;
+    const normalized = normalizeSeries(short);
+    const series = normalized.endsWith('卷') ? normalized : `${normalized}卷`;
     return { scope: 'national', series, regions: [] };
   }
   const matches = regionsInText(short);

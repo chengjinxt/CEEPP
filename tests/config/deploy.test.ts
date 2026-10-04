@@ -13,6 +13,22 @@ describe('production deployment gate', () => {
     expect(config.d1_databases[0].database_id).toBe('336ace7b-b8bf-49fe-9e1e-673822d49e7e');
   });
 
+  it('binds uploaded papers to a dedicated private R2 bucket', () => {
+    const config = JSON.parse(readFileSync(new URL('../../wrangler.jsonc', import.meta.url), 'utf8')) as {
+      r2_buckets?: Array<{ binding: string; bucket_name: string }>;
+    };
+
+    expect(config.r2_buckets).toEqual([{ binding: 'PAPER_FILES', bucket_name: 'ceepp-papers' }]);
+  });
+
+  it('runs a daily retry for uploaded objects awaiting R2 cleanup', () => {
+    const config = JSON.parse(readFileSync(new URL('../../wrangler.jsonc', import.meta.url), 'utf8')) as {
+      triggers?: { crons?: string[] };
+    };
+
+    expect(config.triggers?.crons).toEqual(['17 3 * * *']);
+  });
+
   it('refuses to touch production D1 from a non-main Workers Build', async () => {
     const run = vi.fn(async (_args: string[]) => {});
 

@@ -21,7 +21,9 @@ describe('exam taxonomy', () => {
 
   it('normalizes series, subjects, and 3+1+2 subject roles', () => {
     expect(normalizeSeries('新高考Ⅰ卷')).toBe('全国一卷');
+    expect(normalizeSeries('新高考 I 卷')).toBe('全国一卷');
     expect(normalizeSeries('全国2卷')).toBe('全国二卷');
+    expect(normalizeSeries('全国II卷')).toBe('全国二卷');
     expect(normalizeSubject('政治')).toBe('思想政治');
     expect(normalizeSubject('生物')).toBe('生物学');
     expect(EXAM_SUBJECTS).toContain('文科综合');
@@ -30,9 +32,11 @@ describe('exam taxonomy', () => {
     expect(normalizeSubjectRole('物理', { elective: true })).toBe('elective');
   });
 
-  it('limits national-series presets to 2025/2026 unified subjects', () => {
+  it('limits national-series presets by year and subject role', () => {
     expect(seriesRegions(2025, '全国一卷', 'unified')).toHaveLength(11);
     expect(seriesRegions(2026, '全国二卷', 'unified')).toHaveLength(17);
+    expect(seriesRegions(2026, '全国二卷', 'integrated')).toEqual(['西藏', '新疆']);
+    expect(seriesRegions(2025, '全国二卷', 'integrated')).toEqual([]);
     expect(seriesRegions(2026, '全国二卷', 'first_choice')).toEqual([]);
     expect(seriesRegions(2024, '全国一卷', 'unified')).toEqual([]);
   });
@@ -46,4 +50,3 @@ describe('exam taxonomy', () => {
     expect(normalizeResourceKind('听力：', '英语听力.mp3', 'https://files.example/listening.mp3')).toBe('listening_audio');
   });
 });
-

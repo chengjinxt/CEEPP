@@ -15,6 +15,7 @@ import {
 export const JHCEE_URL = 'https://www.jhcee.cn/pc/gk_information/consultation_detail-8ab0d407-8729-41a4-b5a9-8c5218881b03.html';
 
 const ELECTIVE_REGIONS = new Set(['北京', '天津', '上海', '浙江', '山东', '海南']);
+const JOINT_EVIDENCE = /联考|联合命题|共同命题|协作(?:体|组)/u;
 
 function regionsInTitle(value: string): string[] {
   return EXAM_REGIONS.filter((region) => value.includes(region));
@@ -125,11 +126,15 @@ export function parseJhcee(html: string, sourceUrl = JHCEE_URL): Candidate[] {
         series = localRegions.length === 1
           ? `${localRegions[0]}卷`
           : currentSeries && !/^全国/u.test(currentSeries) ? currentSeries : `${localRegions.join('、')}卷`;
-        originType = localRegions.length === 1 ? 'provincial' : 'joint';
+        originType = localRegions.length === 1
+          ? 'provincial'
+          : JOINT_EVIDENCE.test(`${currentSeries ?? ''} ${title}`) ? 'joint' : 'unknown';
       } else if (series && /^全国/u.test(series)) {
         originType = 'national';
       } else if (localRegions.length) {
-        originType = localRegions.length === 1 ? 'provincial' : 'joint';
+        originType = localRegions.length === 1
+          ? 'provincial'
+          : JOINT_EVIDENCE.test(`${currentSeries ?? ''} ${title}`) ? 'joint' : 'unknown';
       }
 
       const subjectRole = subject
@@ -152,6 +157,7 @@ export function parseJhcee(html: string, sourceUrl = JHCEE_URL): Candidate[] {
         regions_json: JSON.stringify(regions),
         format,
         resource_url: resourceUrl,
+        resource_link_type: 'source',
         source_url: sourceUrl,
         origin_type: originType,
         subject_role: subjectRole,
@@ -166,5 +172,7 @@ export function parseJhcee(html: string, sourceUrl = JHCEE_URL): Candidate[] {
 
 export async function crawlJhcee(options: { fetcher?: typeof fetch } = {}): Promise<Candidate[]> {
   const html = await fetchAllowedText(JHCEE_URL, options.fetcher ?? fetch);
-  return parseJhcee(html, JHCEE_URL);
+  const candidates = parseJhcee(html, JHCEE_URL);
+  if (!candidates.length) throw new Error('JHCEE yielded no resource candidates; its page structure may have changed');
+  return candidates;
 }

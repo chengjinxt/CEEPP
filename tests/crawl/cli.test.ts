@@ -7,6 +7,7 @@ const candidate: Candidate = {
   title: '2025北京.pdf', year: 2025, scope: 'regional', series: '北京卷',
   subject: '数学', regions_json: '["北京"]', format: 'PDF',
   resource_url: 'https://example.org/paper.pdf', source_url: 'https://example.org/source',
+  resource_link_type: 'source',
   origin_type: 'provincial', subject_role: 'unified', resource_kind: 'question',
   classification: 'ordinary', raw_json: '{}',
 };

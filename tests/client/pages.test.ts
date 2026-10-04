@@ -10,8 +10,10 @@ const samplePaper = {
   title: '2024 年北京普通高考语文试卷',
   year: 2024,
   scope: 'regional',
+  originType: 'provincial',
   series: '北京卷',
   subject: '语文',
+  subjectRole: 'unified',
   regions: ['北京'],
   status: 'published',
 };
@@ -39,7 +41,7 @@ describe('paper catalog', () => {
   it('uses selected filters and shows matching results', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string) => {
       const params = new URL(input, 'https://example.test').searchParams;
-      return json(params.get('year') === '2024' && params.get('subject') === '语文'
+      return json(params.get('year') === '2024' && params.get('subjectRole') === 'unified' && params.get('subject') === '语文'
         ? { items: [samplePaper], page: 1, pageSize: 20, total: 1 }
         : { items: [], page: 1, pageSize: 20, total: 0 });
     }));
@@ -47,11 +49,16 @@ describe('paper catalog', () => {
     await flushPromises();
 
     await page.find('select[name="year"]').setValue('2024');
+    expect(page.find('select[name="scope"]').exists()).toBe(false);
+    await page.find('select[name="originType"]').setValue('provincial');
+    await page.find('select[name="subjectRole"]').setValue('unified');
     await page.find('input[name="subject"]').setValue('语文');
     await page.find('form[aria-label="查找试卷"]').trigger('submit');
     await flushPromises();
 
     expect(page.text()).toContain(samplePaper.title);
+    expect(page.text()).toContain('省级自主命题');
+    expect(page.text()).toContain('统一高考科目');
     expect(page.find('a[href="/papers/42"]').exists()).toBe(true);
   });
 
@@ -96,8 +103,8 @@ describe('paper detail', () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({
       ...samplePaper,
       resources: [
-        { id: 1, format: 'PDF', url: 'https://example.com/paper.pdf', linkType: 'source', sourceName: '公开来源', sourceUrl: 'https://example.com', accessCode: null, verifiedAt: '2026-10-01' },
-        { id: 2, format: 'HTML', url: 'https://drive.example.com/abc', linkType: 'drive', sourceName: '本站网盘', sourceUrl: null, accessCode: '1234', verifiedAt: '2026-10-01' },
+        { id: 1, format: 'PDF', kind: 'question', url: 'https://example.com/paper.pdf', linkType: 'source', sourceName: '公开来源', sourceUrl: 'https://example.com', accessCode: null, verifiedAt: '2026-10-01' },
+        { id: 2, format: 'HTML', kind: 'answer', url: 'https://drive.example.com/abc', linkType: 'drive', sourceName: '本站网盘', sourceUrl: null, accessCode: '1234', verifiedAt: '2026-10-01' },
       ],
     })));
     const page = await mountAt('/papers/42', PaperPage);
@@ -106,11 +113,29 @@ describe('paper detail', () => {
     expect(page.text()).toContain(samplePaper.title);
     expect(page.text()).toContain('PDF');
     expect(page.text()).toContain('HTML');
+    expect(page.findAll('.resource-kind').map((kind) => kind.text())).toEqual(['试卷', '答案']);
     expect(page.text()).toContain('1234');
     const links = page.findAll('a[target="_blank"]');
     expect(links.map((link) => link.attributes('href'))).toContain('https://example.com/paper.pdf');
     expect(links.map((link) => link.attributes('href'))).toContain('https://drive.example.com/abc');
     expect(links.map((link) => link.attributes('href'))).toContain('https://example.com/');
     expect(links.every((link) => link.attributes('rel')?.includes('noopener'))).toBe(true);
+  });
+
+  it('offers an uploaded PDF for inline viewing and explicit download', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      ...samplePaper,
+      resources: [{
+        id: 9, format: 'PDF', kind: 'question', linkType: 'upload', url: '/api/resources/9/file',
+        downloadUrl: '/api/resources/9/file?download=1', fileName: '2025-全国一卷-数学.pdf',
+        mimeType: 'application/pdf', sizeBytes: 1200, sourceName: null, sourceUrl: null, accessCode: null, verifiedAt: '2026-10-04',
+      }],
+    })));
+    const page = await mountAt('/papers/42', PaperPage);
+    await flushPromises();
+
+    expect(page.get('a[aria-label="在线查看 2025-全国一卷-数学.pdf"]').attributes('href')).toBe('/api/resources/9/file');
+    expect(page.get('a[aria-label="下载 2025-全国一卷-数学.pdf"]').attributes('href')).toBe('/api/resources/9/file?download=1');
+    expect(page.text()).toContain('1.2 KB');
   });
 });

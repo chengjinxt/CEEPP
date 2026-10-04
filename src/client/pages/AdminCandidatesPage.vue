@@ -2,10 +2,12 @@
 import { onMounted, reactive, ref } from 'vue';
 import { RouterLink } from 'vue-router';
 import { addCandidate, listCandidates, reviewCandidate } from '../api';
-import type { Candidate, Page, PaperInput } from '../api';
+import type { Candidate, CandidateListItem, Page, PaperInput } from '../api';
 import { safeHttpUrl } from '../urls';
+import { ORIGIN_TYPE_LABELS, RESOURCE_KIND_LABELS, SUBJECT_ROLE_LABELS } from '../../shared/exam';
+import type { OriginType, ResourceKind, SubjectRole } from '../../shared/exam';
 
-const result = ref<Page<Candidate> | null>(null);
+const result = ref<Page<CandidateListItem> | null>(null);
 const page = ref(1);
 const loading = ref(false);
 const busyId = ref<number | null>(null);
@@ -13,7 +15,11 @@ const error = ref('');
 const notice = ref('');
 const mergeIds = reactive<Record<number, string>>({});
 const showManual = ref(false);
-const manual = reactive({ title: '', sourceUrl: '', year: '', scope: 'national' as 'national' | 'regional', series: '', subject: '', regions: '', format: 'PDF', resourceUrl: '' });
+const manual = reactive({
+  title: '', sourceUrl: '', year: '', originType: 'unknown' as OriginType, series: '', subject: '',
+  subjectRole: 'other' as SubjectRole, regions: '', format: 'PDF', resourceKind: 'question' as ResourceKind,
+  resourceLinkType: 'source' as 'source' | 'drive', resourceUrl: '',
+});
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -48,8 +54,9 @@ function candidatePaper(candidate: Candidate): PaperInput | null {
   if (!candidate.year || !candidate.scope || !candidate.series || !candidate.subject || !resourceUrl || !sourceUrl) return null;
   return {
     title: candidate.title, year: candidate.year, scope: candidate.scope, series: candidate.series,
-    subject: candidate.subject, regions: candidate.regions,
-    resources: [{ format: candidate.format || 'PDF', url: resourceUrl, linkType: 'source', sourceName: candidate.sourceKey, sourceUrl }],
+    originType: candidate.originType ?? (candidate.scope === 'national' ? 'national' : 'unknown'),
+    subject: candidate.subject, subjectRole: candidate.subjectRole ?? 'other', regions: candidate.regions,
+    resources: [{ format: candidate.format || 'PDF', kind: candidate.resourceKind ?? 'question', url: resourceUrl, linkType: candidate.resourceLinkType, sourceName: candidate.sourceKey, sourceUrl }],
   };
 }
 
@@ -82,9 +89,14 @@ async function addManual(): Promise<void> {
   try {
     await addCandidate({
       sourceKey: 'manual', externalKey: crypto.randomUUID(), title: manual.title.trim(), sourceUrl: manual.sourceUrl.trim(),
-      year: manual.year ? Number(manual.year) : null, scope: manual.scope, series: manual.series.trim() || null,
-      subject: manual.subject.trim() || null, regions: manual.regions.split(/[、,，]/).map((part) => part.trim()).filter(Boolean),
-      format: manual.format.trim() || null, resourceUrl: manual.resourceUrl.trim() || null, classification: 'uncertain',
+      year: manual.year ? Number(manual.year) : null,
+      scope: manual.originType === 'unknown' ? null : manual.originType === 'national' ? 'national' : 'regional',
+      originType: manual.originType, series: manual.series.trim() || null,
+      subject: manual.subject.trim() || null, subjectRole: manual.subjectRole,
+      regions: manual.regions.split(/[、,，]/).map((part) => part.trim()).filter(Boolean),
+      format: manual.format.trim() || null, resourceKind: manual.resourceKind,
+      resourceLinkType: manual.resourceLinkType,
+      resourceUrl: manual.resourceUrl.trim() || null, classification: 'uncertain',
     });
     showManual.value = false;
     manual.title = ''; manual.sourceUrl = ''; manual.year = ''; manual.series = ''; manual.subject = ''; manual.regions = ''; manual.resourceUrl = '';
@@ -106,7 +118,7 @@ onMounted(() => void load());
 
     <form v-if="showManual" class="admin-panel manual-form" @submit.prevent="addManual">
       <div class="section-heading"><div><h2>手动补录候选</h2></div><p>补录后仍需审核</p></div>
-      <div class="form-grid"><label class="wide">候选名称<input v-model="manual.title" required></label><label class="wide">来源页面 URL<input v-model="manual.sourceUrl" type="url" required></label><label>年份<input v-model="manual.year" type="number" min="1977"></label><label>卷别<select v-model="manual.scope"><option value="national">全国卷</option><option value="regional">地区卷</option></select></label><label>试卷系列<input v-model="manual.series"></label><label>科目<input v-model="manual.subject"></label><label>适用地区<input v-model="manual.regions" placeholder="多个地区用逗号分隔"></label><label>格式<input v-model="manual.format"></label><label class="wide">资源 URL<input v-model="manual.resourceUrl" type="url"></label></div>
+      <div class="form-grid"><label class="wide">候选名称<input v-model="manual.title" required></label><label class="wide">来源页面 URL<input v-model="manual.sourceUrl" type="url" required></label><label>年份<input v-model="manual.year" type="number" min="1950"></label><label>命题范围<select v-model="manual.originType"><option v-for="(label, value) in ORIGIN_TYPE_LABELS" :key="value" :value="value">{{ label }}</option></select></label><label>试卷系列<input v-model="manual.series"></label><label>科目<input v-model="manual.subject"></label><label>科目角色<select v-model="manual.subjectRole"><option v-for="(label, value) in SUBJECT_ROLE_LABELS" :key="value" :value="value">{{ label }}</option></select></label><label>适用地区<input v-model="manual.regions" placeholder="多个地区用逗号分隔"></label><label>格式<input v-model="manual.format"></label><label>资料内容<select v-model="manual.resourceKind"><option v-for="(label, value) in RESOURCE_KIND_LABELS" :key="value" :value="value">{{ label }}</option></select></label><label>资源链接类型<select v-model="manual.resourceLinkType"><option value="source">来源页面</option><option value="drive">网盘分享</option></select></label><label class="wide">资源 URL<input v-model="manual.resourceUrl" type="url"></label></div>
       <button class="button button-primary" type="submit">加入待审核</button>
     </form>
 
@@ -118,8 +130,8 @@ onMounted(() => void load());
       <article v-for="candidate in result.items" :key="candidate.id" class="admin-panel candidate-card">
         <div class="candidate-top"><span class="pill" :class="candidate.classification === 'uncertain' ? 'pill-warning' : ''">{{ candidate.classification === 'ordinary' ? '普通高考候选' : '分类待核' }}</span><span class="muted">{{ candidate.sourceKey }} · #{{ candidate.id }}</span></div>
         <h2>{{ candidate.title }}</h2>
-        <p class="candidate-meta">{{ candidate.year || '年份待核' }} · {{ candidate.series || '卷别待核' }} · {{ candidate.subject || '科目待核' }} · {{ candidate.regions.join('、') || '地区待核' }}</p>
-        <div class="candidate-links"><a v-if="safeHttpUrl(candidate.sourceUrl)" :href="safeHttpUrl(candidate.sourceUrl)!" target="_blank" rel="noopener noreferrer">查看来源 ↗</a><a v-if="safeHttpUrl(candidate.resourceUrl)" :href="safeHttpUrl(candidate.resourceUrl)!" target="_blank" rel="noopener noreferrer">检查资源 ↗</a></div>
+        <p class="candidate-meta">{{ candidate.year || '年份待核' }} · {{ candidate.originType ? ORIGIN_TYPE_LABELS[candidate.originType] : '命题范围待核' }} · {{ candidate.series || '卷别待核' }} · {{ candidate.subject || '科目待核' }}<template v-if="candidate.subjectRole">（{{ SUBJECT_ROLE_LABELS[candidate.subjectRole] }}）</template> · {{ candidate.resourceKind ? RESOURCE_KIND_LABELS[candidate.resourceKind] : '资料类型待核' }} · {{ candidate.resourceLinkType === 'drive' ? '网盘分享' : '来源链接' }} · {{ candidate.regions.join('、') || '地区待核' }}</p>
+        <div class="candidate-links"><a v-if="safeHttpUrl(candidate.sourceUrl)" :href="safeHttpUrl(candidate.sourceUrl)!" target="_blank" rel="noopener noreferrer">查看来源 ↗</a><a v-if="safeHttpUrl(candidate.resourceUrl)" :href="safeHttpUrl(candidate.resourceUrl)!" target="_blank" rel="noopener noreferrer">{{ candidate.resourceLinkType === 'drive' ? '检查网盘' : '检查资源' }} ↗</a></div>
         <div v-if="candidate.possiblePaperIds?.length" class="duplicate-suggestions"><span>可能重复：</span><button v-for="id in candidate.possiblePaperIds" :key="id" type="button" :aria-label="`选择疑似重复试卷 ${id}`" @click="mergeIds[candidate.id] = String(id)">试卷 #{{ id }}</button><small>请先核对再合并</small></div>
         <div class="candidate-actions"><button class="button button-primary" type="button" :disabled="busyId === candidate.id || !candidatePaper(candidate)" @click="create(candidate)">创建草稿</button><div class="merge-control"><input v-model="mergeIds[candidate.id]" type="number" min="1" aria-label="目标试卷 ID" placeholder="目标试卷 ID"><button class="button button-secondary" type="button" :aria-label="`合并候选 ${candidate.id}`" :disabled="busyId === candidate.id" @click="merge(candidate)">合并</button></div><button class="button button-text danger" type="button" :disabled="busyId === candidate.id" @click="reject(candidate)">驳回</button></div>
         <p class="candidate-merge-warning">合并至已发布试卷后，资源会立即公开。</p>

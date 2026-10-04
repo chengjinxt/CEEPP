@@ -62,6 +62,40 @@ describe('JHCEE fixed annual resource page', () => {
     });
   });
 
+  it('does not treat multiple applicable regions as proof of joint authoring', () => {
+    const multiRegionArticle = `<div class="gl-gkzx-detail-title">2026 年普通高考</div>
+      <div class="gl-gkzx-detail-word">
+        <p>二、选科科目试卷及答案</p>
+        <p>湖北、湖南</p><p>化学</p>
+        <p>试卷：<a href="https://files.example/multi.pdf">2026年湖北湖南高考化学试卷.pdf</a></p>
+        <p>试卷：<a href="https://files.example/joint.pdf">2026年湖北湖南联考化学试卷.pdf</a></p>
+      </div>`;
+    const [applicable, explicitJoint] = parseJhcee(multiRegionArticle);
+
+    expect(applicable).toMatchObject({
+      scope: null, origin_type: 'unknown', subject_role: 'second_choice', classification: 'uncertain',
+    });
+    expect(JSON.parse(applicable!.regions_json)).toEqual(['湖北', '湖南']);
+    expect(explicitJoint).toMatchObject({
+      scope: 'regional', origin_type: 'joint', subject_role: 'second_choice', classification: 'ordinary',
+    });
+  });
+
+  it('does not infer joint authoring from multiple regions in the unified section', () => {
+    const multiRegionArticle = `<div class="gl-gkzx-detail-title">2026 年普通高考</div>
+      <div class="gl-gkzx-detail-word">
+        <p>一、统考科目试卷及答案</p>
+        <p>湖北、湖南</p><p>数学</p>
+        <p>试卷：<a href="https://files.example/unified-multi.pdf">2026年湖北湖南高考数学试卷.pdf</a></p>
+      </div>`;
+    const [candidate] = parseJhcee(multiRegionArticle);
+
+    expect(candidate).toMatchObject({
+      scope: null, origin_type: 'unknown', subject_role: 'unified', classification: 'uncertain',
+    });
+    expect(JSON.parse(candidate!.regions_json)).toEqual(['湖北', '湖南']);
+  });
+
   it('fetches only the fixed supplied page after its robots policy', async () => {
     const seen: string[] = [];
     const fakeFetch: typeof fetch = async (input) => {
@@ -75,5 +109,12 @@ describe('JHCEE fixed annual resource page', () => {
     await expect(crawlJhcee({ fetcher: fakeFetch })).resolves.toHaveLength(7);
     expect(seen).toEqual(['https://www.jhcee.cn/robots.txt', JHCEE_URL]);
   });
-});
 
+  it('fails loudly when the supplied page no longer yields any resource candidates', async () => {
+    const fakeFetch: typeof fetch = async (input) => String(input).endsWith('/robots.txt')
+      ? new Response('', { status: 404 })
+      : new Response('<div class="gl-gkzx-detail-title">2026 年普通高考</div><main>页面结构已改变</main>');
+
+    await expect(crawlJhcee({ fetcher: fakeFetch })).rejects.toThrow(/no resource candidates/i);
+  });
+});

@@ -1,6 +1,6 @@
 # CEEPP 发布与自动部署
 
-本项目使用 Cloudflare Workers 托管网站与 API、D1 存储试卷数据、Workers Builds 连接 GitHub `main` 自动部署。首期使用免费套餐和 `workers.dev` 地址。本文区分构建时配置、Worker 运行时配置和 GitHub Actions Secrets；三者不能互相替代。
+本项目使用 Cloudflare Workers 托管网站与 API、D1 存储试卷数据、私有 R2 保存管理员上传的 PDF、Workers Builds 连接 GitHub `main` 自动部署。首期使用 `workers.dev` 地址。本文区分构建时配置、Worker 运行时配置、R2 bucket 和 GitHub Actions Secrets；四者不能互相替代。
 
 ## 本次上线记录（2026-10-04）
 
@@ -9,15 +9,20 @@
 - Cloudflare Access 已启用：`CEEPP Admin` 应用只覆盖 `/admin` 和 `/admin/*`，Allow 策略只允许 `chengjinxuetang@hotmail.com`。Worker 运行时的团队域名、AUD 和管理员邮箱也已配置。未登录时实测 `/admin` 跳转 Access 登录（HTTP 302），首页及 `GET /api/papers` 仍返回 HTTP 200。启用 Access 前的 `/admin` HTTP 403 是历史记录，不再代表当前状态。
 - Cloudflare GitHub App 仅获准访问 `chengjinxt/CEEPP`，Worker 的 **Settings > Builds** 已连接该仓库的 `main`；Build command 为 `pnpm lint && pnpm test && pnpm build`，Deploy command 为 `pnpm deploy`，预览构建关闭。构建令牌 `ceepp-workers-builds-auto` 已缩减为当前账号的 D1 Edit 与 Workers Scripts Edit。提交 `cc2f31c` 推送到 `main` 后，[首次自动构建 #242b54ea](https://dash.cloudflare.com/ca11979ca46285840cb4dad01152679c/workers/services/view/ceepp/production/builds/242b54ea-a201-4c6e-9f57-524fb8687586)的安装、lint、测试、构建、远程 D1 迁移检查与 Worker 发布全部成功；迁移日志为 `No migrations to apply!`，因为首次手动发布时已应用 `0001_init.sql`。
 
+### PDF 与新分类版本的发布状态
+
+本版本新增 `0002_taxonomy_and_uploads.sql`、`PAPER_FILES` R2 binding、PDF 上传/预览/下载接口，以及命题范围、科目角色、资料类型和多地区分类。迁移会把旧全国卷保守识别为全国统一命题；旧“地区卷”字段无法证明是省级自主命题还是联考，因此迁为“待核对”，同时规范常见科目和省级行政区别名并去重，避免历史数据被错误定性。旧 urongda/ctfile 链接会回填为“网盘分享”；不属于 31 个支持地区的旧值会从业务关联中移出并保存在 `legacy_region_review` 审计表，需管理员核对，不能静默重新合并。它只有在 `ceepp-papers` bucket 创建、代码推送且对应 Workers Build 成功后才算上线；在本文写入新的构建编号和提交 SHA 之前，不应把这些功能当作已发布。
+
 ## 访问地址与管理员操作
 
 | 用途 | 地址 | 访问方式 |
 | --- | --- | --- |
 | 公开网站 | [ceepp.chengjinxuetang.workers.dev](https://ceepp.chengjinxuetang.workers.dev/) | 浏览器直接打开本站，无需登录；按年份、卷别、地区、科目筛选，进入试卷详情后打开资源。仅显示已发布试卷；第三方网盘或来源站的下载要求以资源页面为准。 |
-| 公开 API | [`GET /api/papers`](https://ceepp.chengjinxuetang.workers.dev/api/papers)、`GET /api/papers/:id` | 无需登录；列表支持 `year`、`scope`、`region`、`subject`、`q`、`page` 查询参数，详情中的 `:id` 替换为真实试卷 ID。只返回已发布试卷。 |
+| 公开 API | [`GET /api/papers`](https://ceepp.chengjinxuetang.workers.dev/api/papers)、`GET /api/papers/:id` | 无需登录；列表支持 `year`、`originType`、`scope`、`subjectRole`、`region`、`subject`、`q`、`page` 查询参数，详情中的 `:id` 替换为真实试卷 ID。只返回已发布试卷。 |
+| 本站 PDF | `GET /api/resources/:id/file` | 只有所属试卷已发布时才能匿名在线查看；追加 `?download=1` 下载。R2 bucket 保持私有，不开放 `r2.dev` 或自定义公共域名。 |
 | 管理后台 | [网站 `/admin`](https://ceepp.chengjinxuetang.workers.dev/admin) | 仅指定管理员登录。此入口先经过 Cloudflare Access，成功后转到 `/admin/candidates`。 |
 | 采集候选审核 | [网站 `/admin/candidates`](https://ceepp.chengjinxuetang.workers.dev/admin/candidates) | 审核采集候选，选择拒绝、创建草稿或合并到现有试卷；采集不会自动发布。 |
-| 试卷管理 | [网站 `/admin/papers`](https://ceepp.chengjinxuetang.workers.dev/admin/papers) | 补录或编辑试卷、地区及资源链接，核验后发布；也可下架。 |
+| 试卷管理 | [网站 `/admin/papers`](https://ceepp.chengjinxuetang.workers.dev/admin/papers) | 补录或编辑试卷、复选多个适用地区、维护外部链接；草稿保存后可上传 PDF 并在线预览，核验后发布，也可下架。 |
 | Cloudflare 运维 | [ceepp Worker 控制台](https://dash.cloudflare.com/ca11979ca46285840cb4dad01152679c/workers/services/view/ceepp/production)、[Cloudflare 控制台](https://dash.cloudflare.com/) | 使用有该 Cloudflare 账号权限的身份登录；查看 Builds、D1、运行时变量。Access 应用及策略在 **Zero Trust > Access controls > Applications** 中管理。 |
 | 代码与每周采集 | [GitHub 仓库](https://github.com/chengjinxt/CEEPP)、[Actions](https://github.com/chengjinxt/CEEPP/actions) | 使用有仓库权限的 GitHub 账号查看提交、自动构建以外的每周采集工作流及其运行记录。 |
 
@@ -32,9 +37,27 @@
 - Cloudflare 账号已启用 `workers.dev` 子域；GitHub 仓库 `chengjinxt/CEEPP` 的 `main` 已有待发布代码。登录 Cloudflare 时使用 GitHub 账号，不等于已经授权 Cloudflare Workers & Pages GitHub App 读取仓库。
 - 当前 Cloudflare 账号已创建名为 `ceepp` 的 D1 数据库，数据库 ID 为 `336ace7b-b8bf-49fe-9e1e-673822d49e7e`。不要重复创建；在 D1 控制台核对 ID 与 [`wrangler.jsonc`](../wrangler.jsonc) 中 `d1_databases[0].database_id` 完全一致。`binding` 保持 `DB`、`database_name` 保持 `ceepp`。D1 ID 不是密钥，但切勿把 API token 写进仓库。
 - 本地先运行 `pnpm install --frozen-lockfile`、`pnpm lint`、`pnpm test`、`pnpm build`。本地 D1 迁移可用 `pnpm exec wrangler d1 migrations apply ceepp --local` 验证；`--local` 不会改动生产库。
+- PDF 版本发布前必须确认同一 Cloudflare 账号已有名为 `ceepp-papers` 的私有 Standard R2 bucket。`wrangler deploy` 不会替你创建缺失的 bucket，绑定目标不存在时应停止发布并先处理第 1 节。
 - 核实提交在 `main` 且相关测试通过。项目要求每次改动有对应测试和 Git commit；随后推送 `main` 才会触发自动部署。
 
-## 1. 连接 GitHub 与 Workers Builds
+## 1. 创建私有 R2 bucket
+
+在 Cloudflare 控制台进入 **Storage & Databases > R2 Object Storage**。如果账号尚未启用 R2，控制台会显示 R2 subscription：当前可能显示 `$0`，同时使用账号已有支付方式，并在超过免费额度后按量计费。此按钮属于可能产生后续费用的订阅确认，必须由账号所有者明确同意后再点击，不能仅凭“优先免费”代为确认。
+
+启用后创建 bucket：
+
+| 设置 | 值 |
+| --- | --- |
+| Bucket name | `ceepp-papers` |
+| Storage class | Standard |
+| Location | Automatic（默认） |
+| Public access / `r2.dev` | 关闭 |
+
+不要创建公开 bucket，也不要把 R2 API token、S3 凭据或对象 URL 写入仓库。Worker 通过 [`wrangler.jsonc`](../wrangler.jsonc) 中 `PAPER_FILES` binding 访问这个 bucket；浏览器只能经过 Worker API 读取已发布试卷的文件。上线后在 R2 用量与账单页面设置/检查告警；代码中的 9 GiB 是应用层软限制，不是 Cloudflare 的硬账单封顶。[R2 入门](https://developers.cloudflare.com/r2/get-started/)、[R2 定价](https://developers.cloudflare.com/r2/pricing/)
+
+上传和删除跨越 D1 与 R2，不能依赖一次请求内的两步操作永远同时成功。`0002_taxonomy_and_uploads.sql` 建立 `r2_cleanup_queue`：上传开始前先登记，资源记录成功写入时由触发器清除；删除资源时由触发器先把对象加入队列，再尝试删除 R2。删除流程若遇到 R2 暂时失败，接口返回 HTTP 202：D1 中的资源已经删除，但对象和清理任务会保留；上传流程失败时则保留原错误响应和清理任务。[`wrangler.jsonc`](../wrangler.jsonc) 的 Cron Trigger 每天 03:17 UTC（北京时间 11:17）先在 D1 原子认领、再重试最多 40 个对象，为 D1 Free 每次调用的查询数上限预留余量；未完成的上传至少保留两小时再认领，避免和仍在传输的请求冲突。队列中的对象容量也计入 9 GiB 软限制。
+
+## 2. 连接 GitHub 与 Workers Builds
 
 在 Cloudflare 控制台打开 **Workers & Pages > Create application > Import a repository**，连接 GitHub，并仅授权本仓库（或按实际组织权限选择）。选 `chengjinxt/CEEPP`，Worker 名设为 `ceepp`，根目录设为仓库根目录 `/`。如果已存在同名 Worker，改走 **Workers & Pages > ceepp > Settings > Builds > Connect**。Worker 名必须与 [`wrangler.jsonc`](../wrangler.jsonc) 的 `name` 相同。Cloudflare 的[新建和连接已有 Worker 步骤](https://developers.cloudflare.com/workers/ci-cd/builds/)可对照控制台。
 
@@ -62,7 +85,7 @@ Cloudflare 自动生成的 Builds token 默认包含多项产品权限，不能�
 
 如果“Save and Deploy”在 token 配好前已触发首次构建，可能出现 D1 权限错误；配置正确 token 后重试该构建即可。不要为了绕过失败而跳过迁移直接发布。
 
-## 2. 保护管理路径
+## 3. 保护管理路径
 
 首次构建成功后，取得 `https://ceepp.<账号子域>.workers.dev`。公开首页与 `/api/*` 保持匿名可访问。管理路径需在 **Zero Trust > Access > Applications** 新建一个 **Self-hosted** 应用，目标使用上述 `workers.dev` 主机的路径，并在**同一个应用**中覆盖 `/admin` 和 `/admin/*`。`/admin/*` 单独配置不匹配 `/admin` 本身；分成两个应用又会产生不同 AUD，而当前 Worker 只接受一个 `ACCESS_AUD`。Allow 策略仅填实际管理员邮箱，不要使用“保护整个 Worker”或“保护所有 Workers”，否则公开站也会被要求登录。[Worker 的路径级 Access](https://developers.cloudflare.com/workers/configuration/cloudflare-access/)、[路径匹配规则](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/)
 
@@ -78,13 +101,24 @@ Cloudflare 自动生成的 Builds token 默认包含多项产品权限，不能�
 
 这里是 Worker **运行时**变量，不是 Workers Builds 的 Build variables。仓库 [`wrangler.jsonc`](../wrangler.jsonc) 设置了 `keep_vars: true`，后续 Wrangler 部署会保留控制台设置的变量。管理请求在 Worker 内还要通过 Access JWT 签名、签发者、AUD 和邮箱校验；变量缺失时返回 403。[Access JWT 校验](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/)
 
-## 3. 验收与后续自动发布
+## 4. 验收与后续自动发布
 
-1. 查看 Workers Builds 的 `main` 构建日志：lint、测试、Vite build、远程 D1 migration、Worker deploy 均应成功。D1 控制台应出现 `d1_migrations` 及业务表；迁移只需对同一数据库应用一次。
-2. 无痕窗口访问 Worker 根路径和 `/api/papers`，应能匿名打开；没有已发布试卷时列表为空是正常状态。当前 Access 已启用：无痕访问 `/admin`、`/admin/papers` 及 `/admin/api/papers` 应跳转 Access 登录、挑战或明确拒绝页；仅被允许的管理员登录后，后台才应打开。若只看到 Worker 返回的 JSON 403，**不能证明**路径已受 Access 保护，应核对第 2 节的应用路径配置。
-3. 核实任何非 `main` 分支都不会执行 `pnpm deploy` 或生产 D1 迁移。以后每次改动按下文的日常流程操作；新增迁移要检查是否兼容当前线上代码。
+1. 查看 Workers Builds 的 `main` 构建日志：lint、测试、Vite build、远程 D1 migration、Worker deploy 均应成功。D1 控制台应出现 `d1_migrations` 及业务表；PDF 版本应显示 `0002_taxonomy_and_uploads.sql` 已应用，Worker 的 Bindings 中应有 `PAPER_FILES → ceepp-papers`。迁移后检查 `legacy_region_review`；有记录表示旧数据包含不支持的地区文本，应根据原始来源人工归类，不要直接写回 `paper_regions`。迁移只需对同一数据库应用一次。
+2. 无痕窗口访问 Worker 根路径和 `/api/papers`，应能匿名打开；没有已发布试卷时列表为空是正常状态。当前 Access 已启用：无痕访问 `/admin`、`/admin/papers` 及 `/admin/api/papers` 应跳转 Access 登录、挑战或明确拒绝页；仅被允许的管理员登录后，后台才应打开。若只看到 Worker 返回的 JSON 403，**不能证明**路径已受 Access 保护，应核对第 3 节的应用路径配置。
+3. 以管理员身份新建一份草稿，设置命题范围、科目角色并复选多个地区；保存后上传一个小型、确认有权使用的 PDF。后台在线预览应返回 HTTP 200，公开文件地址在草稿阶段应为 404。发布后用匿名窗口在线查看并下载，Range 请求应返回 206；随后下架，公开文件地址应再次为 404。不要用第三方受版权保护的文件做验收。
+4. 核实任何非 `main` 分支都不会执行 `pnpm deploy` 或生产 D1 迁移。以后每次改动按下文的日常流程操作；新增迁移要检查是否兼容当前线上代码。
 
 每周采集是另一条链路，由 [GitHub Actions](../.github/workflows/crawl.yml) 运行，不是 Workers Builds。要启用它，在 GitHub 仓库的 Actions Secrets 配置 `CLOUDFLARE_ACCOUNT_ID`、`CLOUDFLARE_D1_DATABASE_ID`、`CLOUDFLARE_API_TOKEN`；其中 D1 ID 必须与 `wrangler.jsonc` 中生产数据库的 ID 完全相同，否则采集会写入另一座数据库。这里应使用单独的、限定到该账号且具备 D1 Edit 的 token。采集只写待审核候选，不会自动公开。不要将这些值写入文档或提交到仓库。
+
+当前采集源还包括指定的 JHCEE 年度汇总页。采集只保存原始资源链接，不会把来源站文件复制进 R2。审核时必须分别确认：
+
+- **命题范围**：全国统一命题、省级自主命题、省际联合命题（同卷）或待核对；
+- **科目角色**：统一高考科目、3+1+2 首选/再选、3+3 选考、文理综合；
+- **适用地区**：表示这份完全相同的试卷在哪些省级行政区使用，可多选，但不代表这些地区所有科目同卷；
+- **资料类型**：试卷、答案、试卷及答案、解析、听力材料、听力音频或其他。
+- **链接类型**：“来源链接”表示资料来源站或直接文件地址，“网盘分享”表示 ctfile 等网盘地址；两者不能混作同一含义，采集和人工补录都应保留该区分。
+
+例如 2026 年全国一卷统一高考科目可应用 11 个地区预设；四川物理、历史、化学等选科资源应归为四川卷，不能因为来源页面把四川列在全国二卷组内，就继承全国二卷全部地区。分类仍需管理员在创建草稿或合并前核对。
 
 ## 日常修改、本地验证与自动发布
 
@@ -100,7 +134,7 @@ Cloudflare 自动生成的 Builds token 默认包含多项产品权限，不能�
    git diff --check
    ```
 
-   `pnpm test` 包含浏览器端单元测试和 Worker 测试。本地开发服务没有生产环境的 Cloudflare Access 登录流程；在本地点击管理后台后看到未授权响应，不能据此判断线上 Access 配置是否正常。后台入口的导航行为由回归测试验证，真正的 Access 登录须在发布后用无痕浏览器验收。
+   `pnpm test` 包含浏览器端单元测试和 Worker 测试，也使用本地 R2 模拟 binding 验证 PDF 上传、权限、在线查看、下载、Range、删除和失败重试；迁移测试会在内存数据库中依次执行 `0001_init.sql` 与 `0002_taxonomy_and_uploads.sql`，确认旧数据和关联不丢失。本地开发服务没有生产环境的 Cloudflare Access 登录流程；在本地点击管理后台后看到未授权响应，不能据此判断线上 Access 配置是否正常。后台入口的导航行为由回归测试验证，真正的 Access 登录须在发布后用无痕浏览器验收。
 3. **只提交本次文件。** 确认当前分支为 `main`；其他分支先按项目流程把已验证的改动合入 `main`，不能直接部署生产。查看 `git diff --stat` 和 `git status --short`，明确文件范围；用 `git add --` 后面逐个列出本次文件，再运行 `git diff --cached --check` 与 `git diff --cached --stat` 核对。创建说明本次修改的 commit，并运行 `git push origin main`；不要用 `git add -A` 把本地笔记、密钥或其他无关文件带入提交。
 4. **确认自动构建与部署。** 打开 [ceepp 的 Cloudflare Builds](https://dash.cloudflare.com/ca11979ca46285840cb4dad01152679c/workers/services/view/ceepp/production/builds)，找到刚推送的 commit SHA，而非只看最新一行是否为绿色。展开该构建，确认 `pnpm lint && pnpm test && pnpm build` 和 `pnpm deploy` 都成功；Deploy 阶段应先完成远程 D1 迁移，再发布 Worker。本次没有新迁移时，`No migrations to apply!` 是正常结果。失败时读取该构建日志、修复并重新验证后再提交；不要跳过迁移直接手工发布。
 5. **线上验收。** 匿名访问[首页](https://ceepp.chengjinxuetang.workers.dev/)与 [`GET /api/papers`](https://ceepp.chengjinxuetang.workers.dev/api/papers)应正常。用未登录的新浏览器会话从**首页实际点击**页眉的“管理后台”入口，确认会进入 Cloudflare Access 登录流程；登录后应到 `/admin/candidates` 且后台接口能加载。页脚入口也要从首页点击验证；若要再次检查首次登录提示，需使用另一个隔离的未登录会话。不要只在地址栏直接输入 `/admin`，因为那无法覆盖前端链接拦截故障。已有 Access 会话时直接进入后台而不再显示登录页是正常现象。最后运行 `git status --short --branch`，确认本地提交已与 `origin/main` 同步。
@@ -112,6 +146,13 @@ Cloudflare 自动生成的 Builds token 默认包含多项产品权限，不能�
 - 本地验证：定向导航测试可运行 `pnpm exec vitest run tests/client/navigation.test.ts --config vitest.config.ts`；本次在 Codex 的 Windows 终端因 `pnpm exec` 未找到可执行文件，改用 `.\node_modules\.bin\vitest.cmd run tests/client/navigation.test.ts --config vitest.config.ts` 运行，结果 4/4。完整单元测试 35/35、Worker 测试 16/16、类型检查和 Vite 构建通过；`git diff --check` 通过。
 - 提交与发布：仅暂存 `src/client/App.vue`、`tests/client/navigation.test.ts`，运行 `git diff --cached --check` 后创建 [`c7a39bf`](https://github.com/chengjinxt/CEEPP/commit/c7a39bf357a7c637d016d854bbb50a5f04c4164f) 并执行 `git push origin main`。[Cloudflare 构建 #2edb398f](https://dash.cloudflare.com/ca11979ca46285840cb4dad01152679c/workers/services/view/ceepp/production/builds/2edb398f-18db-4c29-81e4-88904893056f)显示成功。线上首页已引用新前端资源；匿名请求 `/admin` 返回 Access 登录重定向（HTTP 302），`/api/papers` 返回 HTTP 200。无痕窗口点击入口并完成管理员交互式登录仍需按上一步人工确认。
 
+## 迁移失败与回滚
+
+- 部署顺序是“先迁移 D1，再发布 Worker”。如果 `0002` 迁移成功但 Worker 发布失败，应立即暂停后台录入和 PDF 操作，保留构建日志并优先修复后向前发布；不要直接把旧提交重新部署成长期版本。旧 Worker 不理解上传资源和清理队列，继续编辑试卷可能遗留 R2 对象或向访客返回不完整的上传资源。
+- 回滚前先记录当前 Worker 版本、D1 migration、`resources` 与 `r2_cleanup_queue` 状态以及 R2 bucket 对象数，并安排维护窗口。D1 Time Travel 或数据库恢复只覆盖 D1，不会同步恢复、删除或重命名 R2 对象；数据库与对象存储必须按同一清单核对。
+- 首选做法是发布兼容当前 schema 的修复版本。若确需恢复旧 schema，先停止写入并备份 D1，盘点所有 `storage_type='upload'` 的资源和待清理对象，再准备经过测试的前向修复迁移；不要在生产库手工 `DROP TABLE`、直接改 `d1_migrations`，也不要先清空 R2。
+- 发布恢复后，确认 `r2_cleanup_queue` 会随每日 Cron 减少；如队列持续增长，先查 Worker 日志和 R2 binding/权限，暂停新上传，而不是删除队列表或提高 9 GiB 限额。
+
 ## 常见故障
 
 | 现象 | 优先检查 |
@@ -121,6 +162,11 @@ Cloudflare 自动生成的 Builds token 默认包含多项产品权限，不能�
 | 首次构建找不到 Worker 或名称不符 | Worker 名与 `wrangler.jsonc` 的 `name` 是否都是 `ceepp`；Build 根目录是否为 `/`。 |
 | `pnpm` 或 Node 版本不符 | Build variables 中 `NODE_VERSION=24`、`PNPM_VERSION=11.19.0`；检查 Builds 安装依赖阶段日志。 |
 | D1 migration 报无数据库或权限不足 | 核对 `database_id`、账号及 Builds 的**用户级** token 是否有 D1 Edit；修正后重试构建，不要跳过迁移。 |
+| Deploy 报 `ceepp-papers` 不存在或 R2 binding 失败 | 先确认账号所有者已明确同意 R2 subscription，再在部署所用的同一账号创建名称完全一致的私有 Standard bucket；不要临时删除 binding 绕过发布。 |
+| 后台上传返回 413 / 415 / 507 | 413：文件超过 50 MiB；415：浏览器发送的不是 `application/pdf`；507：本站登记的上传文件已达到 9 GiB 软限制。先核查文件和 R2/D1 用量，不要提高限制绕过账单保护。 |
+| 删除 PDF 返回 202，或 `r2_cleanup_queue` 有记录 | D1 资源已删除，但 R2 删除暂时失败；等待每日 Cron 重试并检查 Worker 日志、`PAPER_FILES` binding 与 R2 状态。不要手工清空队列，否则软限制会漏算孤儿对象。 |
+| D1 migration 成功但 Worker deploy 失败 | 立即停止后台写入，按“迁移失败与回滚”优先修复后向前发布；不要直接长期运行旧 Worker，也不要把恢复 D1 误认为同时恢复了 R2。 |
+| 草稿 PDF 可从公开地址读取 | 属于权限故障，应立即下架相关试卷并检查 `/api/resources/:id/file` 的发布状态过滤；正常行为是草稿公开地址 404、管理员地址在 Access 登录后可读。 |
 | 发布脚本提示只允许 `main` | 核对 Production branch 和 Builds 注入的 `WORKERS_CI_BRANCH`；不要在其他分支手工执行生产部署。 |
 | `/admin` 直接 403、没有登录页 | 核对 Access 应用是否覆盖根路径 `/admin`，Worker 运行时三个变量是否已配置；JWT 校验本身也会在配置错误时拒绝。 |
 | 登录后后台仍为 403 | 核对 `ACCESS_AUD`、团队域名、`ADMIN_EMAIL` 与登录身份的邮箱是否一致，且 `/admin` 与 `/admin/*` 属于同一 Access 应用。 |
@@ -128,4 +174,4 @@ Cloudflare 自动生成的 Builds token 默认包含多项产品权限，不能�
 | 首页也要求登录 | 误启用了 Worker 级或账号级 Access；应仅保护 `workers.dev` 主机的管理路径。 |
 | `/api/papers` 返回空列表 | 尚未有管理员审核并发布试卷；先检查管理后台和 D1，不要把采集候选直接公开。 |
 
-保持免费计划时关注 [Workers 用量](https://developers.cloudflare.com/workers/platform/pricing/)、[D1 用量](https://developers.cloudflare.com/d1/platform/pricing/)及 [Workers Builds 额度](https://developers.cloudflare.com/workers/ci-cd/builds/limits-and-pricing/)；Builds 免费额度目前为每月 3,000 构建分钟、并发 1 次、单次最长 20 分钟。接近额度时先优化查询与采集频率，不自动升级付费。
+关注 [Workers 用量](https://developers.cloudflare.com/workers/platform/pricing/)、[D1 用量](https://developers.cloudflare.com/d1/platform/pricing/)、[R2 用量与定价](https://developers.cloudflare.com/r2/pricing/)及 [Workers Builds 额度](https://developers.cloudflare.com/workers/ci-cd/builds/limits-and-pricing/)；Builds 免费额度目前为每月 3,000 构建分钟、并发 1 次、单次最长 20 分钟。接近免费额度时先优化查询、采集频率和文件保存策略；R2 超额可能自动计费，不得把免费额度描述为不会产生费用。

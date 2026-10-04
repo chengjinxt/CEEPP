@@ -17,5 +17,14 @@
       "database_id": "336ace7b-b8bf-49fe-9e1e-673822d49e7e",
       "migrations_dir": "migrations"
     }
-  ]
+  ],
+  "r2_buckets": [
+    {
+      "binding": "PAPER_FILES",
+      "bucket_name": "ceepp-papers"
+    }
+  ],
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  }
 }

@@ -19,6 +19,20 @@ describe('site navigation', () => {
     expect(app.text()).toContain('春季高考');
   });
 
+  it('explains that paper origin and subject-selection roles are different dimensions', async () => {
+    const router = createAppRouter(createMemoryHistory());
+    await router.push('/guide/terms');
+    await router.isReady();
+    const app = mount(App, { global: { plugins: [router] } });
+
+    expect(app.text()).toContain('命题方式不等于选科方式');
+    expect(app.text()).toContain('统一高考科目');
+    expect(app.text()).toContain('首选科目');
+    expect(app.text()).toContain('再选科目');
+    expect(app.text()).toContain('全国卷与适用地区的对应关系会随年份和科目变化');
+    expect(app.text()).toContain('文科综合、理科综合不是新高考选考科目');
+  });
+
   it('routes the admin landing page to the review queue', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ items: [], page: 1, pageSize: 20, total: 0 }), {
       headers: { 'content-type': 'application/json' },

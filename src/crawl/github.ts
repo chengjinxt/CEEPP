@@ -32,6 +32,7 @@ export function parseGitHubTree(payload: GitTree): Candidate[] {
       regions_json: JSON.stringify(presetRegions.length ? presetRegions : inferredRegions),
       format: fileFormat(filename),
       resource_url: `https://raw.githubusercontent.com/deekur/gaokaomath/main/${path}`,
+      resource_link_type: 'source',
       source_url: `https://github.com/deekur/gaokaomath/blob/main/${path}`,
       origin_type: inferred.scope === 'national' ? 'national' : inferred.scope === 'regional' ? 'provincial' : 'unknown',
       subject_role: subjectRole,

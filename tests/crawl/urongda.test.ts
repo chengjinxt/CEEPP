@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { regionsInText } from '../../src/crawl/classify';
 import { crawlUrongda, discoverUrongdaYearUrls, parseUrongdaYear } from '../../src/crawl/urongda';
 
 describe('urongda ordinary exam pages', () => {
   it('discovers available years from the index without hard-coding their range', () => {
     const html = `<main>
+      <a href="https://">损坏年份入口</a>
       <a href="/exams/gaokao-2025">2025普通高考</a>
       <a href="/exams/gaokao-2024">2024普通高考</a>
       <a href="/exams/chunji-2025">2025春季高考</a>
@@ -47,6 +49,7 @@ describe('urongda ordinary exam pages', () => {
       subject: '数学',
       format: 'PDF',
       resource_url: 'https://url90.ctfile.com/f/1',
+      resource_link_type: 'drive',
       source_url: 'https://t.urongda.com/exams/gaokao-2025',
       origin_type: 'national',
       subject_role: 'unified',
@@ -64,6 +67,49 @@ describe('urongda ordinary exam pages', () => {
     expect(JSON.parse(candidates[3]!.regions_json)).toEqual(['四川']);
   });
 
+  it('does not infer the authoring authority from multi-region usage and keeps traditional components distinct', () => {
+    const html = `<main>
+      <div><h3>全国甲卷</h3><div><span>适用省份</span><span>四川、云南</span></div></div>
+      <h4>物理</h4><ul><li>2024全国甲卷物理试题.pdf <a href="https://files.example/traditional">下载</a></li></ul>
+      <div><h3>新高考Ⅰ卷</h3><div><span>适用省份</span><span>广东、福建</span></div></div>
+      <h4>物理</h4><ul>
+        <li>2024新高考Ⅰ卷物理试题.pdf <a href="https://files.example/unknown-origin">下载</a></li>
+        <li>2024广东、福建高考物理试题.pdf <a href="https://files.example/multi-region">下载</a></li>
+      </ul>
+    </main>`;
+    const candidates = parseUrongdaYear(html, 'https://t.urongda.com/exams/gaokao-2024');
+
+    expect(candidates[0]).toMatchObject({
+      series: '全国甲卷', scope: 'national', origin_type: 'national',
+      subject_role: 'integrated', classification: 'ordinary',
+    });
+    expect(candidates[1]).toMatchObject({
+      series: '全国一卷', scope: null, origin_type: 'unknown',
+      subject_role: 'first_choice', classification: 'uncertain',
+    });
+    expect(candidates[2]).toMatchObject({
+      series: '广东、福建卷', scope: 'regional', origin_type: 'unknown',
+      subject_role: 'first_choice', classification: 'uncertain',
+    });
+    expect(JSON.parse(candidates[2]!.regions_json)).toEqual(['广东', '福建']);
+  });
+
+  it('accepts only the 31 supported province-level regions', () => {
+    expect(regionsInText('北京、香港、台湾、广西')).toEqual(['北京', '广西']);
+  });
+
+  it('skips malformed absolute resource URLs without aborting the year page', () => {
+    const html = `<main>
+      <h3>北京卷</h3><h4>数学</h4><ul>
+        <li>损坏链接试卷.pdf <a href="https://">网盘下载</a></li>
+        <li>有效试卷.pdf <a href="https://files.example/valid.pdf">下载</a></li>
+      </ul>
+    </main>`;
+    const candidates = parseUrongdaYear(html, 'https://t.urongda.com/exams/gaokao-2025');
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.resource_url).toBe('https://files.example/valid.pdf');
+  });
+
   it('stops before the index if robots.txt denies the path', async () => {
     const seen: string[] = [];
     const fakeFetch: typeof fetch = async (input) => {
@@ -77,6 +123,14 @@ describe('urongda ordinary exam pages', () => {
 
     await expect(crawlUrongda({ fetcher: fakeFetch, delayMs: 0 })).rejects.toThrow(/robots/i);
     expect(seen).toEqual(['https://t.urongda.com/robots.txt']);
+  });
+
+  it('fails loudly when the source no longer exposes any ordinary-exam candidates', async () => {
+    const fakeFetch: typeof fetch = async (input) => String(input).endsWith('/robots.txt')
+      ? new Response('', { status: 404 })
+      : new Response('<main>页面结构已改变</main>');
+
+    await expect(crawlUrongda({ fetcher: fakeFetch, delayMs: 0 })).rejects.toThrow(/no resource candidates/i);
   });
 
   it('reuses robots.txt while visiting discovered years at the configured pace', async () => {

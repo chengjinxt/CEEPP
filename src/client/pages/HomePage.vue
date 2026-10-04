@@ -3,14 +3,18 @@ import { onMounted, reactive, ref } from 'vue';
 import { RouterLink } from 'vue-router';
 import { listPapers } from '../api';
 import type { Page, PaperFilters, PaperSummary } from '../api';
+import { EXAM_REGIONS, EXAM_SUBJECTS, ORIGIN_TYPE_LABELS, SUBJECT_ROLE_LABELS } from '../../shared/exam';
+import type { OriginType, SubjectRole } from '../../shared/exam';
 
-const filters = reactive<PaperFilters>({ year: '', scope: '', region: '', subject: '', q: '', page: 1 });
+const filters = reactive<PaperFilters>({
+  year: '', originType: '', subjectRole: '', region: '', subject: '', q: '', page: 1,
+});
 const result = ref<Page<PaperSummary> | null>(null);
 const loading = ref(false);
 const error = ref('');
 const years = Array.from({ length: Math.max(new Date().getFullYear() - 1949, 1) }, (_, index) => String(new Date().getFullYear() - index));
-const regions = ['北京', '天津', '河北', '山西', '内蒙古', '辽宁', '吉林', '黑龙江', '上海', '江苏', '浙江', '安徽', '福建', '江西', '山东', '河南', '湖北', '湖南', '广东', '广西', '海南', '重庆', '四川', '贵州', '云南', '西藏', '陕西', '甘肃', '青海', '宁夏', '新疆'];
-const subjects = ['语文', '数学', '英语', '物理', '化学', '生物', '历史', '地理', '思想政治', '文科综合', '理科综合', '日语', '俄语'];
+const originOptions = Object.entries(ORIGIN_TYPE_LABELS) as [OriginType, string][];
+const subjectRoleOptions = Object.entries(SUBJECT_ROLE_LABELS) as [SubjectRole, string][];
 let requestNumber = 0;
 
 async function load(): Promise<void> {
@@ -47,7 +51,7 @@ onMounted(() => void load());
       <div class="hero-copy">
         <p class="eyebrow">普通高考 · 历年真题</p>
         <h1>找到想练的<span>那份试卷。</span></h1>
-        <p class="lead">按年份、卷别、地区和科目缩小范围，查看经过核对的资料来源，免费打开试卷。</p>
+        <p class="lead">按年份、命题范围、科目角色、适用地区和科目缩小范围，查看经过核对的资料来源，免费打开试卷。</p>
         <a class="text-link" href="#catalog">开始查找 <span aria-hidden="true">↗</span></a>
       </div>
       <div class="hero-art" aria-hidden="true">
@@ -70,19 +74,24 @@ onMounted(() => void load());
             <option value="">全部年份</option><option v-for="year in years" :key="year" :value="year">{{ year }}</option>
           </select>
         </label>
-        <label>卷别
-          <select v-model="filters.scope" name="scope">
-            <option value="">全部卷别</option><option value="national">全国卷</option><option value="regional">地区卷</option>
+        <label>命题范围
+          <select v-model="filters.originType" name="originType">
+            <option value="">全部命题范围</option><option v-for="([value, label]) in originOptions" :key="value" :value="value">{{ label }}</option>
+          </select>
+        </label>
+        <label>科目角色
+          <select v-model="filters.subjectRole" name="subjectRole">
+            <option value="">全部科目角色</option><option v-for="([value, label]) in subjectRoleOptions" :key="value" :value="value">{{ label }}</option>
           </select>
         </label>
         <label>适用地区
           <select v-model="filters.region" name="region">
-            <option value="">全部地区</option><option v-for="region in regions" :key="region" :value="region">{{ region }}</option>
+            <option value="">全部地区</option><option v-for="region in EXAM_REGIONS" :key="region" :value="region">{{ region }}</option>
           </select>
         </label>
         <label>科目
           <input v-model="filters.subject" name="subject" list="subject-options" placeholder="输入任意科目">
-          <datalist id="subject-options"><option v-for="subject in subjects" :key="subject" :value="subject" /></datalist>
+          <datalist id="subject-options"><option v-for="subject in EXAM_SUBJECTS" :key="subject" :value="subject" /></datalist>
         </label>
         <label class="filter-keyword">试卷名称
           <input v-model="filters.q" name="q" type="search" placeholder="例如：新高考 I 卷 数学">
@@ -104,7 +113,7 @@ onMounted(() => void load());
         <article v-for="paper in result.items" :key="paper.id" class="paper-card">
           <div class="paper-card-year">{{ paper.year }}<small>YEAR</small></div>
           <div class="paper-card-content">
-            <div class="paper-card-meta"><span>{{ paper.scope === 'national' ? '全国卷' : '地区卷' }}</span><span>{{ paper.series }}</span><span>{{ paper.subject }}</span></div>
+            <div class="paper-card-meta"><span>{{ ORIGIN_TYPE_LABELS[paper.originType] }}</span><span>{{ paper.series }}</span><span>{{ paper.subject }}</span><span>{{ SUBJECT_ROLE_LABELS[paper.subjectRole] }}</span></div>
             <h4><RouterLink :to="`/papers/${paper.id}`">{{ paper.title }}</RouterLink></h4>
             <p>适用地区：{{ paper.regions.length ? paper.regions.join('、') : '以试卷信息为准' }}</p>
           </div>
@@ -122,7 +131,7 @@ onMounted(() => void load());
       <div><p class="eyebrow">QUICK GUIDE</p><h2>查找之前，先了解这些。</h2></div>
       <div class="guide-links">
         <RouterLink to="/guide/scope">普通高考范围 <span>↗</span></RouterLink>
-        <RouterLink to="/guide/terms">卷别名词解释 <span>↗</span></RouterLink>
+        <RouterLink to="/guide/terms">命题与选科解释 <span>↗</span></RouterLink>
         <RouterLink to="/guide/history">高考改革简史 <span>↗</span></RouterLink>
       </div>
     </section>

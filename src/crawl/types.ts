@@ -11,6 +11,7 @@ export interface Candidate {
   regions_json: string;
   format: string | null;
   resource_url: string | null;
+  resource_link_type: 'source' | 'drive';
   source_url: string;
   origin_type: OriginType;
   subject_role: SubjectRole;

@@ -1,8 +1,11 @@
+import type { OriginType, ResourceKind, SubjectRole } from '../shared/exam';
+
 export type Scope = 'national' | 'regional';
 export type PaperStatus = 'draft' | 'published';
 
 export interface ResourceInput {
   format: string;
+  kind?: ResourceKind;
   url: string;
   linkType: 'source' | 'drive';
   sourceName?: string;
@@ -15,8 +18,10 @@ export interface PaperInput {
   title: string;
   year: number;
   scope: Scope;
+  originType: OriginType;
   series: string;
   subject: string;
+  subjectRole: SubjectRole;
   regions: string[];
   resources: ResourceInput[];
 }
@@ -26,8 +31,21 @@ export interface PaperSummary extends Omit<PaperInput, 'resources'> {
   status: PaperStatus;
 }
 
-export interface PaperResource extends ResourceInput {
+export interface PaperResource {
   id: number;
+  format: string;
+  kind: ResourceKind;
+  storageType: 'external' | 'upload';
+  url: string;
+  linkType: ResourceInput['linkType'] | 'upload';
+  sourceName: string | null;
+  sourceUrl: string | null;
+  accessCode: string | null;
+  verifiedAt: string | null;
+  downloadUrl: string | null;
+  fileName: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
 }
 
 export interface PaperDetail extends PaperSummary {
@@ -41,15 +59,22 @@ export interface Candidate {
   title: string;
   year: number | null;
   scope: Scope | null;
+  originType?: OriginType | null;
   series: string | null;
   subject: string | null;
+  subjectRole?: SubjectRole | null;
   regions: string[];
   format: string | null;
+  resourceKind?: ResourceKind | null;
+  resourceLinkType: 'source' | 'drive';
   resourceUrl: string | null;
   sourceUrl: string;
   classification: 'ordinary' | 'uncertain';
   reviewStatus: 'pending' | 'approved' | 'rejected';
   paperId: number | null;
+}
+
+export interface CandidateListItem extends Candidate {
   possiblePaperIds: number[];
 }
 
@@ -62,7 +87,8 @@ export interface Page<T> {
 
 export interface PaperFilters {
   year?: string;
-  scope?: string;
+  originType?: string;
+  subjectRole?: string;
   region?: string;
   subject?: string;
   q?: string;
@@ -74,11 +100,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     credentials: 'same-origin',
     headers: {
-      ...(init?.body ? { 'content-type': 'application/json' } : {}),
+      ...(typeof init?.body === 'string' ? { 'content-type': 'application/json' } : {}),
       ...init?.headers,
     },
   });
-  const data: unknown = await response.json().catch(() => null);
+  const data: unknown = response.status === 204 ? null : await response.json().catch(() => null);
   if (!response.ok) {
     const error = typeof data === 'object' && data !== null && 'error' in data && typeof data.error === 'string'
       ? data.error
@@ -97,7 +123,7 @@ function pagePath(path: string, page: number, status?: string): string {
 
 export function listPapers(filters: PaperFilters): Promise<Page<PaperSummary>> {
   const params = new URLSearchParams();
-  for (const key of ['year', 'scope', 'region', 'subject', 'q'] as const) {
+  for (const key of ['year', 'originType', 'subjectRole', 'region', 'subject', 'q'] as const) {
     const value = filters[key]?.trim();
     if (value) params.set(key, value);
   }
@@ -109,15 +135,15 @@ export function getPaper(id: number): Promise<PaperDetail> {
   return request<PaperDetail>(`/api/papers/${id}`);
 }
 
-export function listCandidates(page = 1): Promise<Page<Candidate>> {
-  return request<Page<Candidate>>(pagePath('/admin/api/candidates', page, 'pending'));
+export function listCandidates(page = 1): Promise<Page<CandidateListItem>> {
+  return request<Page<CandidateListItem>>(pagePath('/admin/api/candidates', page, 'pending'));
 }
 
 export function reviewCandidate(id: number, body: { action: 'create'; paper: PaperInput } | { action: 'merge'; paperId: number } | { action: 'reject' }): Promise<{ candidate: Candidate; paper?: PaperDetail }> {
   return request<{ candidate: Candidate; paper?: PaperDetail }>(`/admin/api/candidates/${id}/review`, { method: 'POST', body: JSON.stringify(body) });
 }
 
-export function addCandidate(body: Omit<Candidate, 'id' | 'reviewStatus' | 'paperId' | 'possiblePaperIds'>): Promise<Candidate> {
+export function addCandidate(body: Omit<Candidate, 'id' | 'reviewStatus' | 'paperId'>): Promise<Candidate> {
   return request<Candidate>('/admin/api/candidates', { method: 'POST', body: JSON.stringify(body) });
 }
 
@@ -138,4 +164,17 @@ export function savePaper(paper: PaperInput, id?: number): Promise<PaperDetail> 
 
 export function setPaperStatus(id: number, status: PaperStatus): Promise<PaperDetail> {
   return request<PaperDetail>(`/admin/api/papers/${id}/status`, { method: 'POST', body: JSON.stringify({ status }) });
+}
+
+export function uploadPaperPdf(paperId: number, file: File, kind: ResourceKind): Promise<PaperResource> {
+  const params = new URLSearchParams({ filename: file.name, kind });
+  return request<PaperResource>(`/admin/api/papers/${paperId}/resources/pdf?${params}`, {
+    method: 'POST',
+    body: file,
+    headers: { 'content-type': 'application/pdf', 'x-ceepp-file-size': String(file.size) },
+  });
+}
+
+export function deletePaperResource(paperId: number, resourceId: number): Promise<void> {
+  return request<void>(`/admin/api/papers/${paperId}/resources/${resourceId}`, { method: 'DELETE' });
 }

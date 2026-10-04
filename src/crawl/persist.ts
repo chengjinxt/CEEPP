@@ -10,15 +10,15 @@ interface Options {
 const columns = [
   'title', 'year', 'scope', 'series', 'subject', 'regions_json', 'format',
   'resource_url', 'source_url', 'origin_type', 'subject_role', 'resource_kind',
-  'classification', 'raw_json',
+  'resource_link_type', 'classification', 'raw_json',
 ] as const;
 
 const sql = `INSERT INTO candidates (
   source_key, external_key, title, year, scope, series, subject, regions_json,
   format, resource_url, source_url, origin_type, subject_role, resource_kind,
-  classification, raw_json, discovered_at, updated_at
+  resource_link_type, classification, raw_json, discovered_at, updated_at
 ) VALUES (?, ?, ?, CAST(NULLIF(?, '') AS INTEGER), NULLIF(?, ''), NULLIF(?, ''),
-  NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT(source_key, external_key) DO UPDATE SET
   ${columns.map((column) => `${column} = excluded.${column}`).join(',\n  ')},
   updated_at = CURRENT_TIMESTAMP
@@ -34,7 +34,8 @@ export async function upsertCandidates(candidates: Candidate[], options: Options
         String(candidate.year ?? ''), candidate.scope ?? '', candidate.series ?? '',
         candidate.subject ?? '', candidate.regions_json, candidate.format ?? '',
         candidate.resource_url ?? '', candidate.source_url, candidate.origin_type,
-        candidate.subject_role, candidate.resource_kind, candidate.classification, candidate.raw_json],
+        candidate.subject_role, candidate.resource_kind, candidate.resource_link_type,
+        candidate.classification, candidate.raw_json],
     }));
     const response = await fetcher(url, {
       method: 'POST',
