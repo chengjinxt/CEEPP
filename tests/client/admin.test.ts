@@ -263,7 +263,7 @@ describe('paper editing', () => {
     const page = await mountAt('/admin/papers/42', AdminPaperEditorPage);
     await flushPromises();
     const file = new File(['%PDF-1.7 sample'], uploaded.fileName, { type: 'application/pdf' });
-    const fileInput = page.get('input[name="pdf-upload"]');
+    const fileInput = page.get('input[name="file-upload"]');
     Object.defineProperty(fileInput.element, 'files', { configurable: true, value: [file] });
     await fileInput.trigger('change');
     await flushPromises();
@@ -278,6 +278,40 @@ describe('paper editing', () => {
     expect(page.text()).not.toContain(uploaded.fileName);
   });
 
+  it('switches the stored-file picker to MP3 for listening audio and labels playback clearly', async () => {
+    const uploaded = {
+      id: 11, format: 'MP3', kind: 'listening_audio', linkType: 'upload',
+      url: '/admin/api/resources/11/file', downloadUrl: '/admin/api/resources/11/file?download=1',
+      fileName: '2025-英语听力.mp3', mimeType: 'audio/mpeg', sizeBytes: 4096,
+    };
+    const requests: Array<{ url: string; options?: RequestInit }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: string, options?: RequestInit) => {
+      requests.push({ url: input, options });
+      if (options?.method === 'POST') return json(uploaded, 201);
+      return json({
+        id: 42, title: '2025 全国一卷英语', year: 2025, scope: 'national', originType: 'national',
+        series: '全国一卷', subject: '英语', subjectRole: 'unified', regions: ['河北'], status: 'draft', resources: [],
+      });
+    }));
+    const page = await mountAt('/admin/papers/42', AdminPaperEditorPage);
+    await flushPromises();
+    await page.get('.upload-panel select[name="upload-kind"]').setValue('listening_audio');
+
+    const fileInput = page.get('input[name="file-upload"]');
+    expect(fileInput.attributes('accept')).toBe('audio/mpeg,.mp3');
+    expect(page.text()).toContain('选择 MP3 上传');
+    const file = new File(['ID3 audio'], uploaded.fileName, { type: 'audio/mpeg' });
+    Object.defineProperty(fileInput.element, 'files', { configurable: true, value: [file] });
+    await fileInput.trigger('change');
+    await flushPromises();
+
+    const upload = requests.find((request) => request.options?.method === 'POST');
+    expect(upload?.url).toContain('/admin/api/papers/42/resources/file?');
+    expect(new Headers(upload?.options?.headers).get('content-type')).toBe('audio/mpeg');
+    expect(page.text()).toContain('MP3 已上传，可在线播放');
+    expect(page.get('a[aria-label="在线播放 2025-英语听力.mp3"]').attributes('href')).toBe(uploaded.url);
+  });
+
   it('keeps publication disabled until an in-flight PDF upload has finished', async () => {
     let finishUpload!: (response: Response) => void;
     const pendingUpload = new Promise<Response>((resolve) => { finishUpload = resolve; });
@@ -290,7 +324,7 @@ describe('paper editing', () => {
     }));
     const page = await mountAt('/admin/papers/42', AdminPaperEditorPage);
     await flushPromises();
-    const fileInput = page.get('input[name="pdf-upload"]');
+    const fileInput = page.get('input[name="file-upload"]');
     Object.defineProperty(fileInput.element, 'files', {
       configurable: true,
       value: [new File(['%PDF-1.7 sample'], 'uploading.pdf', { type: 'application/pdf' })],
@@ -318,8 +352,8 @@ describe('paper editing', () => {
     const page = await mountAt('/admin/papers/42', AdminPaperEditorPage);
     await flushPromises();
 
-    expect(page.text()).toContain('请先下架试卷，再上传或删除 PDF');
-    expect(page.find('input[name="pdf-upload"]').exists()).toBe(false);
+    expect(page.text()).toContain('请先下架试卷，再上传或删除本站文件');
+    expect(page.find('input[name="file-upload"]').exists()).toBe(false);
   });
 
   it('publishes a draft through the status endpoint', async () => {

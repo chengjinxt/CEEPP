@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { RouterLink, useRoute } from 'vue-router';
 import {
-  deletePaperResource, getAdminPaper, savePaper, setPaperStatus, uploadPaperPdf,
+  deletePaperResource, getAdminPaper, savePaper, setPaperStatus, uploadPaperFile,
 } from '../api';
 import type { PaperInput, PaperResource, PaperStatus, ResourceInput, Scope } from '../api';
 import {
@@ -42,6 +42,9 @@ const uploadKind = ref<ResourceKind>('question');
 const originOptions = Object.entries(ORIGIN_TYPE_LABELS) as [OriginType, string][];
 const subjectRoleOptions = Object.entries(SUBJECT_ROLE_LABELS) as [SubjectRole, string][];
 const resourceKindOptions = Object.entries(RESOURCE_KIND_LABELS) as [ResourceKind, string][];
+const uploadIsAudio = computed(() => uploadKind.value === 'listening_audio');
+const uploadFormat = computed(() => uploadIsAudio.value ? 'MP3' : 'PDF');
+const uploadAccept = computed(() => uploadIsAudio.value ? 'audio/mpeg,.mp3' : 'application/pdf,.pdf');
 const presetRegions = computed(() => form.originType === 'national'
   ? seriesRegions(Number(form.year), form.series, form.subjectRole)
   : []);
@@ -200,24 +203,27 @@ async function changeStatus(): Promise<void> {
   }
 }
 
-async function uploadPdf(event: Event): Promise<void> {
+async function uploadFile(event: Event): Promise<void> {
   const inputElement = event.target as HTMLInputElement;
   const file = inputElement.files?.[0];
   inputElement.value = '';
   if (!file || !savedId.value || status.value !== 'draft') return;
-  if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-    error.value = '请选择 PDF 文件';
+  const isAudio = uploadIsAudio.value;
+  const format = isAudio ? 'MP3' : 'PDF';
+  const extension = isAudio ? '.mp3' : '.pdf';
+  if (!file.name.toLowerCase().endsWith(extension)) {
+    error.value = `请选择 ${format} 文件`;
     return;
   }
   notice.value = '';
   error.value = '';
   uploading.value = true;
   try {
-    const uploaded = await uploadPaperPdf(savedId.value, file, uploadKind.value);
+    const uploaded = await uploadPaperFile(savedId.value, file, uploadKind.value);
     uploadedResources.value.push(uploaded);
-    notice.value = 'PDF 已上传，可在线查看';
+    notice.value = isAudio ? 'MP3 已上传，可在线播放' : 'PDF 已上传，可在线查看';
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : 'PDF 上传失败';
+    error.value = cause instanceof Error ? cause.message : `${format} 上传失败`;
   } finally {
     uploading.value = false;
   }
@@ -327,19 +333,19 @@ watch(
       </section>
 
       <section class="admin-panel editor-main upload-panel">
-        <div class="section-heading"><div><p class="eyebrow">SITE PDF</p><h2>本站 PDF 文件</h2></div></div>
-        <p class="upload-help">上传后文件由本站保存，发布后读者可直接在线查看或下载。</p>
-        <p v-if="!savedId" class="upload-guard">请先保存为草稿，再上传 PDF 文件。</p>
-        <p v-else-if="status === 'published'" class="upload-guard">已发布文件正在公开访问。请先下架试卷，再上传或删除 PDF。</p>
+        <div class="section-heading"><div><p class="eyebrow">SITE FILES</p><h2>本站文件</h2></div></div>
+        <p class="upload-help">试卷、答案等上传 PDF；“听力音频”上传 MP3。发布后读者可在线查看、播放或下载。</p>
+        <p v-if="!savedId" class="upload-guard">请先保存为草稿，再上传本站文件。</p>
+        <p v-else-if="status === 'published'" class="upload-guard">已发布文件正在公开访问。请先下架试卷，再上传或删除本站文件。</p>
         <div v-else class="upload-control">
-          <label>资料内容<select v-model="uploadKind"><option v-for="([value, label]) in resourceKindOptions" :key="value" :value="value">{{ label }}</option></select></label>
-          <label class="file-picker button button-secondary">{{ uploading ? '上传中…' : '选择 PDF 上传' }}<input name="pdf-upload" type="file" accept="application/pdf,.pdf" :disabled="uploading" @change="uploadPdf"></label>
+          <label>资料内容<select v-model="uploadKind" name="upload-kind" :disabled="uploading"><option v-for="([value, label]) in resourceKindOptions" :key="value" :value="value">{{ label }}</option></select></label>
+          <label class="file-picker button button-secondary">{{ uploading ? '上传中…' : `选择 ${uploadFormat} 上传` }}<input name="file-upload" type="file" :accept="uploadAccept" :disabled="uploading" @change="uploadFile"></label>
         </div>
         <div v-if="uploadedResources.length" class="uploaded-list">
           <article v-for="resource in uploadedResources" :key="resource.id" class="uploaded-resource-row">
             <div><strong>{{ resource.fileName || `${resource.format} 文件` }}</strong><span>{{ RESOURCE_KIND_LABELS[resource.kind || 'question'] }}<template v-if="resource.sizeBytes !== null"> · {{ fileSize(resource.sizeBytes) }}</template></span></div>
             <div class="uploaded-actions">
-              <a class="text-link" :href="resource.url" target="_blank" rel="noopener noreferrer" :aria-label="`在线查看 ${resource.fileName || resource.format}`">在线查看</a>
+              <a class="text-link" :href="resource.url" target="_blank" rel="noopener noreferrer" :aria-label="`${resource.mimeType?.startsWith('audio/') ? '在线播放' : '在线查看'} ${resource.fileName || resource.format}`">{{ resource.mimeType?.startsWith('audio/') ? '在线播放' : '在线查看' }}</a>
               <a v-if="resource.downloadUrl" class="text-link" :href="resource.downloadUrl" :aria-label="`下载 ${resource.fileName || resource.format}`">下载</a>
               <button v-if="status === 'draft'" class="button button-text danger" type="button" :disabled="deletingId === resource.id" :aria-label="`删除上传文件 ${resource.fileName || resource.format}`" @click="removeUpload(resource)">删除</button>
             </div>

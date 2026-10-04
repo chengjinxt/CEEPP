@@ -59,7 +59,7 @@ watch(() => route.params.id, () => void load());
       <div class="detail-layout">
         <section class="detail-main" aria-labelledby="resource-heading">
           <div class="section-heading"><div><p class="eyebrow">AVAILABLE FILES</p><h2 id="resource-heading">可用资料</h2></div></div>
-          <p class="detail-intro">本站 PDF 可直接在线查看或下载；外部资源会前往原始来源或分享页面。</p>
+          <p class="detail-intro">本站 PDF 可在线查看，MP3 可在线播放，两者均可下载；外部资源会前往原始来源或分享页面。</p>
           <div v-if="paper.resources.length === 0" class="state-panel"><h3>暂无可用资源</h3><p>这份试卷的信息已收录，资源链接正在补齐。</p></div>
           <article v-for="resource in paper.resources" :key="resource.id" class="resource-card">
             <div class="resource-format">{{ resource.format }}</div>
@@ -72,8 +72,8 @@ watch(() => route.params.id, () => void load());
               <p v-if="resource.verifiedAt" class="verified-date">核验于 {{ resource.verifiedAt.slice(0, 10) }}</p>
             </div>
             <div v-if="resource.linkType === 'upload' && sameSiteFileUrl(resource.url)" class="resource-actions">
-              <a class="button button-primary" :href="sameSiteFileUrl(resource.url)!" target="_blank" rel="noopener noreferrer" :aria-label="`在线查看 ${resource.fileName || resource.format}`">在线查看 ↗</a>
-              <a v-if="sameSiteFileUrl(resource.downloadUrl)" class="button button-secondary" :href="sameSiteFileUrl(resource.downloadUrl)!" :aria-label="`下载 ${resource.fileName || resource.format}`">下载 PDF</a>
+              <a class="button button-primary" :href="sameSiteFileUrl(resource.url)!" target="_blank" rel="noopener noreferrer" :aria-label="`${resource.mimeType?.startsWith('audio/') ? '在线播放' : '在线查看'} ${resource.fileName || resource.format}`">{{ resource.mimeType?.startsWith('audio/') ? '在线播放' : '在线查看' }} ↗</a>
+              <a v-if="sameSiteFileUrl(resource.downloadUrl)" class="button button-secondary" :href="sameSiteFileUrl(resource.downloadUrl)!" :aria-label="`下载 ${resource.fileName || resource.format}`">下载 {{ resource.format }}</a>
             </div>
             <a v-else-if="safeHttpUrl(resource.url)" class="button button-primary" :href="safeHttpUrl(resource.url)!" target="_blank" rel="noopener noreferrer">打开资源 ↗</a>
             <span v-else class="resource-unavailable">链接暂不可用</span>

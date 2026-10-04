@@ -166,12 +166,15 @@ export function setPaperStatus(id: number, status: PaperStatus): Promise<PaperDe
   return request<PaperDetail>(`/admin/api/papers/${id}/status`, { method: 'POST', body: JSON.stringify({ status }) });
 }
 
-export function uploadPaperPdf(paperId: number, file: File, kind: ResourceKind): Promise<PaperResource> {
+export function uploadPaperFile(paperId: number, file: File, kind: ResourceKind): Promise<PaperResource> {
   const params = new URLSearchParams({ filename: file.name, kind });
-  return request<PaperResource>(`/admin/api/papers/${paperId}/resources/pdf?${params}`, {
+  return request<PaperResource>(`/admin/api/papers/${paperId}/resources/file?${params}`, {
     method: 'POST',
     body: file,
-    headers: { 'content-type': 'application/pdf', 'x-ceepp-file-size': String(file.size) },
+    headers: {
+      'content-type': kind === 'listening_audio' ? 'audio/mpeg' : 'application/pdf',
+      'x-ceepp-file-size': String(file.size),
+    },
   });
 }
 

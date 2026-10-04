@@ -138,4 +138,20 @@ describe('paper detail', () => {
     expect(page.get('a[aria-label="下载 2025-全国一卷-数学.pdf"]').attributes('href')).toBe('/api/resources/9/file?download=1');
     expect(page.text()).toContain('1.2 KB');
   });
+
+  it('offers uploaded listening audio for playback and MP3 download', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      ...samplePaper,
+      resources: [{
+        id: 10, format: 'MP3', kind: 'listening_audio', linkType: 'upload', url: '/api/resources/10/file',
+        downloadUrl: '/api/resources/10/file?download=1', fileName: '2025-英语听力.mp3',
+        mimeType: 'audio/mpeg', sizeBytes: 4096, sourceName: null, sourceUrl: null, accessCode: null, verifiedAt: '2026-10-05',
+      }],
+    })));
+    const page = await mountAt('/papers/42', PaperPage);
+    await flushPromises();
+
+    expect(page.get('a[aria-label="在线播放 2025-英语听力.mp3"]').attributes('href')).toBe('/api/resources/10/file');
+    expect(page.get('a[aria-label="下载 2025-英语听力.mp3"]').text()).toContain('下载 MP3');
+  });
 });

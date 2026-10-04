@@ -8,13 +8,13 @@ import {
   type SubjectRole,
 } from '../shared/exam'
 import {
-  PdfFileFailure,
+  StoredFileFailure,
   PAPER_STORAGE_SOFT_LIMIT_BYTES,
-  pdfFileResponse,
-  pdfStorageKey,
-  readPdfUpload,
+  storedFileResponse,
+  storedFileKey,
+  readStoredUpload,
   resourceKindValue,
-  type StoredPdf,
+  type StoredFile,
 } from './pdf-files'
 
 export interface Env extends AccessEnv {
@@ -490,16 +490,16 @@ async function updatePaper(db: D1Database, id: number, input: PaperInput): Promi
   return (await paperDetail(db, id, true))!
 }
 
-async function uploadPaperPdf(request: Request, env: Env, url: URL, paperId: number): Promise<Record<string, unknown>> {
+async function uploadPaperFile(request: Request, env: Env, url: URL, paperId: number): Promise<Record<string, unknown>> {
   const paper = await env.DB.prepare('SELECT status FROM papers WHERE id = ?').bind(paperId).first<{ status: PaperStatus }>()
   if (!paper) throw new HttpFailure('Paper not found', 404)
-  if (paper.status !== 'draft') throw new HttpFailure('PDF files can only be uploaded to draft papers', 409)
+  if (paper.status !== 'draft') throw new HttpFailure('Files can only be uploaded to draft papers', 409)
   const usage = await env.DB.prepare(`SELECT
       COALESCE((SELECT SUM(size_bytes) FROM resources WHERE storage_type = 'upload'), 0)
       + COALESCE((SELECT SUM(size_bytes) FROM r2_cleanup_queue), 0) AS bytes`)
     .first<{ bytes: number }>()
-  const upload = await readPdfUpload(request, url, usage?.bytes ?? 0)
-  const storageKey = pdfStorageKey(paperId)
+  const upload = await readStoredUpload(request, url, usage?.bytes ?? 0)
+  const storageKey = storedFileKey(paperId, upload.extension)
   try {
     const reserved = await env.DB.prepare(`INSERT INTO r2_cleanup_queue (storage_key, size_bytes, reason)
       SELECT ?, ?, 'upload_pending'
@@ -508,7 +508,7 @@ async function uploadPaperPdf(request: Request, env: Env, url: URL, paperId: num
       RETURNING storage_key`)
       .bind(storageKey, upload.sizeBytes, upload.sizeBytes, PAPER_STORAGE_SOFT_LIMIT_BYTES)
       .first<{ storage_key: string }>()
-    if (!reserved) throw new PdfFileFailure('PDF storage has reached the 900 MiB safety limit', 507)
+    if (!reserved) throw new StoredFileFailure('File storage has reached the 900 MiB safety limit', 507)
     const etag = `"${crypto.randomUUID()}"`
     await Promise.all([
       env.PAPER_FILES.put(storageKey, upload.body, {
@@ -521,7 +521,7 @@ async function uploadPaperPdf(request: Request, env: Env, url: URL, paperId: num
     ])
     const inserted = await env.DB.prepare(`INSERT INTO resources
       (paper_id, format, kind, storage_type, storage_key, filename, mime_type, size_bytes, etag)
-      SELECT p.id, 'PDF', ?, 'upload', ?, ?, 'application/pdf', ?, ?
+      SELECT p.id, ?, ?, 'upload', ?, ?, ?, ?, ?
       FROM papers AS p
       WHERE p.id = ? AND p.status = 'draft'
         AND EXISTS (SELECT 1 FROM r2_cleanup_queue
@@ -531,21 +531,21 @@ async function uploadPaperPdf(request: Request, env: Env, url: URL, paperId: num
           + ? <= ?
       RETURNING id, paper_id, format, kind, storage_type, url, link_type,
         source_name, source_url, access_code, verified_at, storage_key, filename, mime_type, size_bytes, etag`)
-      .bind(upload.kind, storageKey, upload.filename, upload.sizeBytes, etag,
+      .bind(upload.format, upload.kind, storageKey, upload.filename, upload.mimeType, upload.sizeBytes, etag,
         paperId, storageKey, storageKey, upload.sizeBytes, PAPER_STORAGE_SOFT_LIMIT_BYTES)
       .first<ResourceRow>()
     if (!inserted) {
       const latestPaper = await env.DB.prepare('SELECT status FROM papers WHERE id = ?').bind(paperId).first<{ status: PaperStatus }>()
       if (!latestPaper) throw new HttpFailure('Paper not found', 404)
-      if (latestPaper.status !== 'draft') throw new HttpFailure('PDF files can only be uploaded to draft papers', 409)
+      if (latestPaper.status !== 'draft') throw new HttpFailure('Files can only be uploaded to draft papers', 409)
       const latestUsage = await env.DB.prepare(`SELECT
           COALESCE((SELECT SUM(size_bytes) FROM resources WHERE storage_type = 'upload'), 0)
           + COALESCE((SELECT SUM(size_bytes) FROM r2_cleanup_queue WHERE storage_key <> ?), 0) AS bytes`)
         .bind(storageKey).first<{ bytes: number }>()
       if ((latestUsage?.bytes ?? 0) + upload.sizeBytes > PAPER_STORAGE_SOFT_LIMIT_BYTES) {
-        throw new PdfFileFailure('PDF storage has reached the 900 MiB safety limit', 507)
+        throw new StoredFileFailure('File storage has reached the 900 MiB safety limit', 507)
       }
-      throw new HttpFailure('Paper changed while the PDF was uploading; retry from the current draft', 409)
+      throw new HttpFailure('Paper changed while the file was uploading; retry from the current draft', 409)
     }
     return resourceDto(inserted, true)
   } catch (error) {
@@ -557,7 +557,7 @@ async function uploadPaperPdf(request: Request, env: Env, url: URL, paperId: num
         FROM resources WHERE storage_key = ?`).bind(storageKey).first<ResourceRow>()
       if (committed) return resourceDto(committed, true)
     } catch (lookupError) {
-      console.error('Could not determine whether the PDF resource was committed', lookupError)
+      console.error('Could not determine whether the uploaded resource was committed', lookupError)
       throw error
     }
     await cleanupStoredObject(env, storageKey, { sizeBytes: upload.sizeBytes, reason: 'upload_pending' })
@@ -590,7 +590,7 @@ async function recordCleanupFailure(
         updated_at = datetime('now')`)
       .bind(storageKey, marker.sizeBytes, marker.reason, message.slice(0, 500)).run()
   } catch (queueError) {
-    console.error('Could not update the PDF cleanup queue', queueError)
+    console.error('Could not update the file cleanup queue', queueError)
   }
 }
 
@@ -599,13 +599,13 @@ async function cleanupStoredObject(env: Env, storageKey: string, marker: Cleanup
     await env.PAPER_FILES.delete(storageKey)
   } catch (error) {
     await recordCleanupFailure(env.DB, storageKey, marker, error)
-    console.error('Could not remove a queued PDF object', error)
+    console.error('Could not remove a queued file object', error)
     return false
   }
   try {
     await env.DB.prepare('DELETE FROM r2_cleanup_queue WHERE storage_key = ?').bind(storageKey).run()
   } catch (error) {
-    console.error('Removed a PDF object but could not clear its cleanup marker', error)
+    console.error('Removed a file object but could not clear its cleanup marker', error)
     return false
   }
   return true
@@ -631,21 +631,21 @@ export async function cleanupPendingObjects(env: Env): Promise<void> {
   }
 }
 
-interface FileResourceRow extends StoredPdf {
+interface FileResourceRow extends StoredFile {
   id: number
   paper_id: number
   storage_type: StorageType
   status: PaperStatus
 }
 
-async function servePdf(request: Request, env: Env, resourceId: number, admin: boolean, url: URL): Promise<Response> {
+async function serveStoredFile(request: Request, env: Env, resourceId: number, admin: boolean, url: URL): Promise<Response> {
   const row = await env.DB.prepare(`SELECT r.id, r.paper_id, r.storage_type, r.storage_key, r.filename,
     r.mime_type, r.size_bytes, r.etag, p.status
     FROM resources AS r JOIN papers AS p ON p.id = r.paper_id
     WHERE r.id = ? AND r.storage_type = 'upload' ${admin ? '' : "AND p.status = 'published'"}`)
     .bind(resourceId).first<FileResourceRow>()
-  if (!row) throw new HttpFailure('PDF resource not found', 404)
-  return pdfFileResponse(request, env.PAPER_FILES, row, url.searchParams.get('download') === '1', admin)
+  if (!row) throw new HttpFailure('Stored resource not found', 404)
+  return storedFileResponse(request, env.PAPER_FILES, row, url.searchParams.get('download') === '1', admin)
 }
 
 async function deletePaperResource(env: Env, paperId: number, resourceId: number): Promise<Response> {
@@ -797,15 +797,15 @@ async function reviewCandidate(db: D1Database, id: number, body: Record<string, 
 async function handleAdminApi(request: Request, env: Env, url: URL): Promise<Response> {
   const path = url.pathname
   const method = request.method
-  const uploadMatch = /^\/admin\/api\/papers\/(\d+)\/resources\/pdf$/.exec(path)
+  const uploadMatch = /^\/admin\/api\/papers\/(\d+)\/resources\/(?:file|pdf)$/.exec(path)
   if (uploadMatch) {
     if (method !== 'POST') return json({ error: 'Method not allowed' }, 405)
-    return json(await uploadPaperPdf(request, env, url, positiveId(uploadMatch[1])), 201)
+    return json(await uploadPaperFile(request, env, url, positiveId(uploadMatch[1])), 201)
   }
   const adminFileMatch = /^\/admin\/api\/resources\/(\d+)\/file$/.exec(path)
   if (adminFileMatch) {
     if (method !== 'GET' && method !== 'HEAD') return json({ error: 'Method not allowed' }, 405)
-    return servePdf(request, env, positiveId(adminFileMatch[1]), true, url)
+    return serveStoredFile(request, env, positiveId(adminFileMatch[1]), true, url)
   }
   const deleteResourceMatch = /^\/admin\/api\/papers\/(\d+)\/resources\/(\d+)$/.exec(path)
   if (deleteResourceMatch) {
@@ -856,7 +856,7 @@ async function handlePublicApi(request: Request, env: Env, url: URL): Promise<Re
   const fileMatch = /^\/api\/resources\/(\d+)\/file$/.exec(url.pathname)
   if (fileMatch) {
     if (request.method !== 'GET' && request.method !== 'HEAD') return json({ error: 'Method not allowed' }, 405)
-    return servePdf(request, env, positiveId(fileMatch[1]), false, url)
+    return serveStoredFile(request, env, positiveId(fileMatch[1]), false, url)
   }
   if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405)
   if (url.pathname === '/api/papers') return json(await paperList(env.DB, url, true))
@@ -882,7 +882,7 @@ export function createApp(authorizeAdmin: AuthorizeAdmin = verifyAdmin) {
         return env.ASSETS ? env.ASSETS.fetch(request) : json({ error: 'Not found' }, 404)
       } catch (error) {
         if (error instanceof HttpFailure) return json({ error: error.message }, error.status)
-        if (error instanceof PdfFileFailure) return json({ error: error.message }, error.status)
+        if (error instanceof StoredFileFailure) return json({ error: error.message }, error.status)
         console.error('Request failed', error)
         return json({ error: 'Internal server error' }, 500)
       }

@@ -829,6 +829,51 @@ describe('admin paper and candidate API', () => {
     expect(publishedUpload.status).toBe(409)
   })
 
+  it('uploads listening audio as MP3 and serves it with range support', async () => {
+    const paperId = await createPaper({ ...mathPaper, subject: '英语', resources: [] })
+    const mp3 = new Uint8Array([
+      0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0xff, 0xfb, 0x90, 0x64, 0x01, 0x02, 0x03, 0x04,
+    ])
+    const uploaded = await adminRaw(
+      `/admin/api/papers/${paperId}/resources/file?filename=listening.mp3&kind=listening_audio`,
+      'POST',
+      mp3,
+      { 'content-type': 'audio/mpeg' },
+    )
+    expect(uploaded.status).toBe(201)
+    const resource = await uploaded.json() as { id: number, format: string, kind: string, mimeType: string }
+    expect(resource).toMatchObject({ format: 'MP3', kind: 'listening_audio', mimeType: 'audio/mpeg' })
+
+    expect((await admin(`/admin/api/papers/${paperId}/status`, 'POST', { status: 'published' })).status).toBe(200)
+    const range = await worker.fetch(rawRequest(
+      `/api/resources/${resource.id}/file`, 'GET', undefined, { range: 'bytes=10-13' },
+    ), env)
+    expect(range.status).toBe(206)
+    expect(range.headers.get('content-type')).toBe('audio/mpeg')
+    expect(range.headers.get('content-range')).toBe(`bytes 10-13/${mp3.byteLength}`)
+    expect(new Uint8Array(await range.arrayBuffer())).toEqual(mp3.slice(10, 14))
+  })
+
+  it('rejects mislabeled or invalid listening audio uploads', async () => {
+    const paperId = await createPaper({ ...mathPaper, subject: '英语', resources: [] })
+    const pdfAsAudio = await adminRaw(
+      `/admin/api/papers/${paperId}/resources/file?filename=listening.mp3&kind=listening_audio`,
+      'POST',
+      new TextEncoder().encode('%PDF-1.7'),
+      { 'content-type': 'audio/mpeg' },
+    )
+    expect(pdfAsAudio.status).toBe(400)
+
+    const mp3AsQuestion = await adminRaw(
+      `/admin/api/papers/${paperId}/resources/file?filename=listening.mp3&kind=question`,
+      'POST',
+      new Uint8Array([0x49, 0x44, 0x33, 0x04, 0x00]),
+      { 'content-type': 'audio/mpeg' },
+    )
+    expect(mp3AsQuestion.status).toBe(415)
+  })
+
   it('stops uploads before the private KV namespace exceeds the 900 MiB pilot limit', async () => {
     const paperId = await createPaper({ ...mathPaper, resources: [] })
     await database.prepare(`INSERT INTO resources
@@ -848,7 +893,7 @@ describe('admin paper and candidate API', () => {
     expect((await paperFiles.list()).keys).toHaveLength(0)
   })
 
-  it('counts queued orphan objects toward the PDF storage safety limit', async () => {
+  it('counts queued orphan objects toward the file storage safety limit', async () => {
     const paperId = await createPaper({ ...mathPaper, resources: [] })
     await database.prepare(`INSERT INTO r2_cleanup_queue (storage_key, size_bytes, reason)
       VALUES ('orphan/full.pdf', ?, 'upload_pending')`).bind(PAPER_KV_SOFT_LIMIT_BYTES).run()

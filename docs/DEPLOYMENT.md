@@ -1,6 +1,6 @@
 # CEEPP 发布与自动部署
 
-本项目使用 Cloudflare Workers 托管网站与 API、D1 存储试卷数据、私有 Workers KV 保存管理员上传的少量 PDF、Workers Builds 连接 GitHub `main` 自动部署。首期使用 `workers.dev` 地址。本文区分构建时配置、Worker 运行时配置、KV namespace 和 GitHub Actions Secrets；四者不能互相替代。R2 当前没有启用。
+本项目使用 Cloudflare Workers 托管网站与 API、D1 存储试卷数据、私有 Workers KV 保存管理员上传的少量 PDF/MP3、Workers Builds 连接 GitHub `main` 自动部署。首期使用 `workers.dev` 地址。本文区分构建时配置、Worker 运行时配置、KV namespace 和 GitHub Actions Secrets；四者不能互相替代。R2 当前没有启用。
 
 ## 本次上线记录（2026-10-04 至 2026-10-05）
 
@@ -23,10 +23,10 @@
 | --- | --- | --- |
 | 公开网站 | [ceepp.chengjinxuetang.workers.dev](https://ceepp.chengjinxuetang.workers.dev/) | 浏览器直接打开本站，无需登录；按年份、卷别、地区、科目筛选，进入试卷详情后打开资源。仅显示已发布试卷；第三方网盘或来源站的下载要求以资源页面为准。 |
 | 公开 API | [`GET /api/papers`](https://ceepp.chengjinxuetang.workers.dev/api/papers)、`GET /api/papers/:id` | 无需登录；列表支持 `year`、`originType`、`scope`、`subjectRole`、`region`、`subject`、`q`、`page` 查询参数，详情中的 `:id` 替换为真实试卷 ID。只返回已发布试卷。 |
-| 本站 PDF | `GET /api/resources/:id/file` | 只有所属试卷已发布时才能匿名在线查看；追加 `?download=1` 下载。KV namespace 保持私有，浏览器不能绕过 Worker 直接读取。 |
+| 本站 PDF/MP3 | `GET /api/resources/:id/file` | 只有所属试卷已发布时才能匿名在线查看或播放；追加 `?download=1` 下载。KV namespace 保持私有，浏览器不能绕过 Worker 直接读取。 |
 | 管理后台 | [网站 `/admin`](https://ceepp.chengjinxuetang.workers.dev/admin) | 仅指定管理员登录。此入口先经过 Cloudflare Access，成功后转到 `/admin/candidates`。 |
 | 采集候选审核 | [网站 `/admin/candidates`](https://ceepp.chengjinxuetang.workers.dev/admin/candidates) | 审核采集候选，选择拒绝、创建草稿或合并到现有试卷；采集不会自动发布。 |
-| 试卷管理 | [网站 `/admin/papers`](https://ceepp.chengjinxuetang.workers.dev/admin/papers) | 补录或编辑试卷、复选多个适用地区、维护外部链接；草稿保存后可上传 PDF 并在线预览，核验后发布，也可下架。 |
+| 试卷管理 | [网站 `/admin/papers`](https://ceepp.chengjinxuetang.workers.dev/admin/papers) | 补录或编辑试卷、复选多个适用地区、维护外部链接；草稿保存后可上传 PDF，资料内容选“听力音频”时上传 MP3，核验后发布，也可下架。 |
 | Cloudflare 运维 | [ceepp Worker 控制台](https://dash.cloudflare.com/ca11979ca46285840cb4dad01152679c/workers/services/view/ceepp/production)、[Cloudflare 控制台](https://dash.cloudflare.com/) | 使用有该 Cloudflare 账号权限的身份登录；查看 Builds、D1、运行时变量。Access 应用及策略在 **Zero Trust > Access controls > Applications** 中管理。 |
 | 代码与每周采集 | [GitHub 仓库](https://github.com/chengjinxt/CEEPP)、[Actions](https://github.com/chengjinxt/CEEPP/actions) | 使用有仓库权限的 GitHub 账号查看提交、自动构建以外的每周采集工作流及其运行记录。 |
 
@@ -41,7 +41,7 @@
 - Cloudflare 账号已启用 `workers.dev` 子域；GitHub 仓库 `chengjinxt/CEEPP` 的 `main` 已有待发布代码。登录 Cloudflare 时使用 GitHub 账号，不等于已经授权 Cloudflare Workers & Pages GitHub App 读取仓库。
 - 当前 Cloudflare 账号已创建名为 `ceepp` 的 D1 数据库，数据库 ID 为 `336ace7b-b8bf-49fe-9e1e-673822d49e7e`。不要重复创建；在 D1 控制台核对 ID 与 [`wrangler.jsonc`](../wrangler.jsonc) 中 `d1_databases[0].database_id` 完全一致。`binding` 保持 `DB`、`database_name` 保持 `ceepp`。D1 ID 不是密钥，但切勿把 API token 写进仓库。
 - 本地先运行 `pnpm install --frozen-lockfile`、`pnpm lint`、`pnpm test`、`pnpm build`。本地 D1 迁移可用 `pnpm exec wrangler d1 migrations apply ceepp --local` 验证；`--local` 不会改动生产库。
-- PDF 版本发布前必须确认同一 Cloudflare 账号已有名为 `ceepp-paper-files` 的私有 KV namespace，ID 为 `18332fafefe24709aa6cc132a3dc18a0`。`wrangler deploy` 不会替你创建缺失的 namespace，绑定目标不存在时应停止发布并先处理第 1 节。
+- 文件上传版本发布前必须确认同一 Cloudflare 账号已有名为 `ceepp-paper-files` 的私有 KV namespace，ID 为 `18332fafefe24709aa6cc132a3dc18a0`。`wrangler deploy` 不会替你创建缺失的 namespace，绑定目标不存在时应停止发布并先处理第 1 节。
 - 核实提交在 `main` 且相关测试通过。项目要求每次改动有对应测试和 Git commit；随后推送 `main` 才会触发自动部署。
 
 ## 1. 创建私有 Workers KV namespace
@@ -55,7 +55,7 @@
 | Data location | Standard |
 | Worker binding | `PAPER_FILES` |
 
-Namespace ID 是资源标识，不是凭据，可以写入 [`wrangler.jsonc`](../wrangler.jsonc)；API token 不能写入仓库。Worker 通过 `PAPER_FILES` binding 读写，浏览器只能经过 Worker API 读取已发布试卷。R2 不需要创建或订阅。KV Free 的 1 GB 存储额度按账号下所有 namespace 合计，单个 namespace 的存储上限也为 1 GB；单值最多 25 MiB。应用进一步限制单个 PDF 为 20 MiB；900 MiB 软限制只统计本站 D1 已登记文件与待清理孤儿对象，不包含账号内其他 KV 占用。如果同一账号还有其他 namespace 或 KV 数据，本站可能在软限制之前就因账号总额度不足而写入失败。KV 是最终一致存储，跨节点的新建或覆盖可能延迟 60 秒或更久；本方案只用于少量、低访问 PDF 的首期闭环。[KV 入门](https://developers.cloudflare.com/kv/get-started/)、[KV 限额](https://developers.cloudflare.com/kv/platform/limits/)、[KV 一致性](https://developers.cloudflare.com/kv/concepts/how-kv-works/)
+Namespace ID 是资源标识，不是凭据，可以写入 [`wrangler.jsonc`](../wrangler.jsonc)；API token 不能写入仓库。Worker 通过 `PAPER_FILES` binding 读写，浏览器只能经过 Worker API 读取已发布试卷。R2 不需要创建或订阅。KV Free 的 1 GB 存储额度按账号下所有 namespace 合计，单个 namespace 的存储上限也为 1 GB；单值最多 25 MiB。应用进一步限制单个 PDF/MP3 为 20 MiB；900 MiB 软限制只统计本站 D1 已登记文件与待清理孤儿对象，不包含账号内其他 KV 占用。如果同一账号还有其他 namespace 或 KV 数据，本站可能在软限制之前就因账号总额度不足而写入失败。KV 是最终一致存储，跨节点的新建或覆盖可能延迟 60 秒或更久；本方案只用于少量、低访问 PDF/MP3 的首期闭环。[KV 入门](https://developers.cloudflare.com/kv/get-started/)、[KV 限额](https://developers.cloudflare.com/kv/platform/limits/)、[KV 一致性](https://developers.cloudflare.com/kv/concepts/how-kv-works/)
 
 上传和删除跨越 D1 与 KV，不能依赖一次请求内的两步操作永远同时成功。`0002_taxonomy_and_uploads.sql` 建立历史命名的 `r2_cleanup_queue`（名称为兼容既有迁移保留，当前实际清理目标是 KV）：上传开始前先登记，资源记录成功写入时由触发器清除；删除资源时由触发器先把对象加入队列，再尝试删除 KV。删除流程若遇到 KV 暂时失败，接口返回 HTTP 202：D1 中的资源已经删除，但对象和清理任务会保留；上传流程失败时则保留原错误响应和清理任务。[`wrangler.jsonc`](../wrangler.jsonc) 的 Cron Trigger 每天 03:17 UTC（北京时间 11:17）先在 D1 原子认领、再重试最多 40 个对象，为 D1 Free 每次调用的查询数上限预留余量；未完成的上传至少保留两小时再认领，避免和仍在传输的请求冲突。队列中的对象容量也计入 900 MiB 软限制。
 
@@ -107,7 +107,7 @@ Cloudflare 自动生成的 Builds token 默认包含多项产品权限，不能�
 
 1. 查看 Workers Builds 的 `main` 构建日志：lint、测试、Vite build、远程 D1 migration、Worker deploy 均应成功。D1 控制台应出现 `d1_migrations` 及业务表；PDF 版本应显示 `0002_taxonomy_and_uploads.sql` 已应用，Worker 的 Bindings 中应有 `PAPER_FILES → ceepp-paper-files`。迁移后检查 `legacy_region_review`；有记录表示旧数据包含不支持的地区文本，应根据原始来源人工归类，不要直接写回 `paper_regions`。迁移只需对同一数据库应用一次。
 2. 无痕窗口访问 Worker 根路径和 `/api/papers`，应能匿名打开；没有已发布试卷时列表为空是正常状态。当前 Access 已启用：无痕访问 `/admin`、`/admin/papers` 及 `/admin/api/papers` 应跳转 Access 登录、挑战或明确拒绝页；仅被允许的管理员登录后，后台才应打开。若只看到 Worker 返回的 JSON 403，**不能证明**路径已受 Access 保护，应核对第 3 节的应用路径配置。
-3. 以管理员身份新建一份草稿，设置命题范围、科目角色并复选多个地区；保存后上传一个小型、确认有权使用的 PDF。后台在线预览应返回 HTTP 200，公开文件地址在草稿阶段应为 404。发布后用匿名窗口在线查看并下载，Range 请求应返回 206；随后下架，公开文件地址应再次为 404。不要用第三方受版权保护的文件做验收。
+3. 以管理员身份新建一份草稿，设置命题范围、科目角色并复选多个地区；保存后上传一个小型、确认有权使用的 PDF。再将资料内容切换为“听力音频”，确认按钮和文件选择器改为 MP3，并上传一个有权使用的小型 MP3。后台在线查看/播放应返回 HTTP 200，公开文件地址在草稿阶段应为 404。发布后用匿名窗口在线查看或播放并下载，Range 请求应返回 206；随后下架，公开文件地址应再次为 404。不要用第三方受版权保护的文件做验收。
 4. 核实任何非 `main` 分支都不会执行 `pnpm deploy` 或生产 D1 迁移。以后每次改动按下文的日常流程操作；新增迁移要检查是否兼容当前线上代码。
 
 每周采集是另一条链路，由 [GitHub Actions](../.github/workflows/crawl.yml) 运行，不是 Workers Builds。要启用它，在 GitHub 仓库的 Actions Secrets 配置 `CLOUDFLARE_ACCOUNT_ID`、`CLOUDFLARE_D1_DATABASE_ID`、`CLOUDFLARE_API_TOKEN`；其中 D1 ID 必须与 `wrangler.jsonc` 中生产数据库的 ID 完全相同，否则采集会写入另一座数据库。这里应使用单独的、限定到该账号且具备 D1 Edit 的 token。采集只写待审核候选，不会自动公开。不要将这些值写入文档或提交到仓库。
@@ -136,7 +136,7 @@ Cloudflare 自动生成的 Builds token 默认包含多项产品权限，不能�
    git diff --check
    ```
 
-   `pnpm test` 包含浏览器端单元测试和 Worker 测试，也使用本地 KV 模拟 binding 验证 PDF 上传、权限、在线查看、下载、Range、删除和失败重试；迁移测试会在内存数据库中依次执行 `0001_init.sql` 与 `0002_taxonomy_and_uploads.sql`，确认旧数据和关联不丢失。本地开发服务没有生产环境的 Cloudflare Access 登录流程；在本地点击管理后台后看到未授权响应，不能据此判断线上 Access 配置是否正常。后台入口的导航行为由回归测试验证，真正的 Access 登录须在发布后用无痕浏览器验收。
+   `pnpm test` 包含浏览器端单元测试和 Worker 测试，也使用本地 KV 模拟 binding 验证 PDF/MP3 上传、格式校验、权限、在线查看或播放、下载、Range、删除和失败重试；迁移测试会在内存数据库中依次执行 `0001_init.sql` 与 `0002_taxonomy_and_uploads.sql`，确认旧数据和关联不丢失。本地开发服务没有生产环境的 Cloudflare Access 登录流程；在本地点击管理后台后看到未授权响应，不能据此判断线上 Access 配置是否正常。后台入口的导航行为由回归测试验证，真正的 Access 登录须在发布后用无痕浏览器验收。
 3. **只提交本次文件。** 确认当前分支为 `main`；其他分支先按项目流程把已验证的改动合入 `main`，不能直接部署生产。查看 `git diff --stat` 和 `git status --short`，明确文件范围；用 `git add --` 后面逐个列出本次文件，再运行 `git diff --cached --check` 与 `git diff --cached --stat` 核对。创建说明本次修改的 commit，并运行 `git push origin main`；不要用 `git add -A` 把本地笔记、密钥或其他无关文件带入提交。
 4. **确认自动构建与部署。** 打开 [ceepp 的 Cloudflare Builds](https://dash.cloudflare.com/ca11979ca46285840cb4dad01152679c/workers/services/view/ceepp/production/builds)，找到刚推送的 commit SHA，而非只看最新一行是否为绿色。展开该构建，确认 `pnpm lint && pnpm test && pnpm build` 和 `pnpm deploy` 都成功；Deploy 阶段应先完成远程 D1 迁移，再发布 Worker。本次没有新迁移时，`No migrations to apply!` 是正常结果。失败时读取该构建日志、修复并重新验证后再提交；不要跳过迁移直接手工发布。
 5. **线上验收。** 匿名访问[首页](https://ceepp.chengjinxuetang.workers.dev/)与 [`GET /api/papers`](https://ceepp.chengjinxuetang.workers.dev/api/papers)应正常。用未登录的新浏览器会话从**首页实际点击**页眉的“管理后台”入口，确认会进入 Cloudflare Access 登录流程；登录后应到 `/admin/candidates` 且后台接口能加载。页脚入口也要从首页点击验证；若要再次检查首次登录提示，需使用另一个隔离的未登录会话。不要只在地址栏直接输入 `/admin`，因为那无法覆盖前端链接拦截故障。已有 Access 会话时直接进入后台而不再显示登录页是正常现象。最后运行 `git status --short --branch`，确认本地提交已与 `origin/main` 同步。
@@ -165,11 +165,11 @@ Cloudflare 自动生成的 Builds token 默认包含多项产品权限，不能�
 | `pnpm` 或 Node 版本不符 | Build variables 中 `NODE_VERSION=24`、`PNPM_VERSION=11.19.0`；检查 Builds 安装依赖阶段日志。 |
 | D1 migration 报无数据库或权限不足 | 核对 `database_id`、账号及 Builds 的**用户级** token 是否有 D1 Edit；修正后重试构建，不要跳过迁移。 |
 | Deploy 报 KV namespace 不存在、无权限或 binding 失败 | 核对 `ceepp-paper-files` 是否已存在于部署所用账号、其 ID 是否与 `wrangler.jsonc` 一致，并确认 Builds token 保留 Workers Scripts Edit 与 D1 Edit。绑定既有 namespace 不需要 Workers KV Storage Edit；只有通过 token 创建 namespace 或由 CI 直接执行 KV 运维时才临时添加该权限。不要临时删除 binding 绕过发布。 |
-| 后台上传返回 413 / 415 / 507 | 413：文件超过 20 MiB；415：浏览器发送的不是 `application/pdf`；507：本站 D1 已登记文件与待清理对象达到 900 MiB 软限制。该统计不包含账号内其他 KV 占用；即使尚未达到 900 MiB，其他 namespace 或 KV 数据也可能先耗尽账号合计 1 GB 额度。先核查文件和账号级 KV/D1 用量，不要提高限制绕过免费额度保护。 |
+| 后台上传返回 400 / 413 / 415 / 507 | 400：扩展名、实际文件头或声明大小不匹配；413：文件超过 20 MiB；415：普通资料不是 `application/pdf`，或“听力音频”不是 `audio/mpeg`；507：本站 D1 已登记文件与待清理对象达到 900 MiB 软限制。该统计不包含账号内其他 KV 占用；即使尚未达到 900 MiB，其他 namespace 或 KV 数据也可能先耗尽账号合计 1 GB 额度。先核查文件和账号级 KV/D1 用量，不要提高限制绕过免费额度保护。 |
 | 上传后立刻从另一网络查看短暂 404 | KV 是最终一致存储，跨 Cloudflare 节点传播可能延迟 60 秒或更久；先等待并重试，不要重复上传同一文件。持续失败则检查 KV key、D1 资源记录与 Worker 日志。 |
-| 删除 PDF 返回 202，或 `r2_cleanup_queue` 有记录 | D1 资源已删除，但 KV 删除暂时失败；等待每日 Cron 重试并检查 Worker 日志、`PAPER_FILES` binding 与 KV 状态。不要手工清空队列，否则软限制会漏算孤儿对象。 |
+| 删除本站文件返回 202，或 `r2_cleanup_queue` 有记录 | D1 资源已删除，但 KV 删除暂时失败；等待每日 Cron 重试并检查 Worker 日志、`PAPER_FILES` binding 与 KV 状态。不要手工清空队列，否则软限制会漏算孤儿对象。 |
 | D1 migration 成功但 Worker deploy 失败 | 立即停止后台写入，按“迁移失败与回滚”优先修复后向前发布；不要直接长期运行旧 Worker，也不要把恢复 D1 误认为同时恢复了 KV。 |
-| 草稿 PDF 可从公开地址读取 | 属于权限故障，应立即下架相关试卷并检查 `/api/resources/:id/file` 的发布状态过滤；正常行为是草稿公开地址 404、管理员地址在 Access 登录后可读。 |
+| 草稿文件可从公开地址读取 | 属于权限故障，应立即下架相关试卷并检查 `/api/resources/:id/file` 的发布状态过滤；正常行为是草稿公开地址 404、管理员地址在 Access 登录后可读。 |
 | 发布脚本提示只允许 `main` | 核对 Production branch 和 Builds 注入的 `WORKERS_CI_BRANCH`；不要在其他分支手工执行生产部署。 |
 | `/admin` 直接 403、没有登录页 | 核对 Access 应用是否覆盖根路径 `/admin`，Worker 运行时三个变量是否已配置；JWT 校验本身也会在配置错误时拒绝。 |
 | 登录后后台仍为 403 | 核对 `ACCESS_AUD`、团队域名、`ADMIN_EMAIL` 与登录身份的邮箱是否一致，且 `/admin` 与 `/admin/*` 属于同一 Access 应用。 |

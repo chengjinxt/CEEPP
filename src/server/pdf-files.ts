@@ -1,6 +1,6 @@
 import type { ResourceKind } from '../shared/exam'
 
-export const MAX_PDF_BYTES = 20 * 1024 * 1024
+export const MAX_FILE_BYTES = 20 * 1024 * 1024
 export const PAPER_STORAGE_SOFT_LIMIT_BYTES = 900 * 1024 * 1024
 
 const RESOURCE_KINDS = [
@@ -8,22 +8,25 @@ const RESOURCE_KINDS = [
   'listening_paper', 'listening_audio', 'other',
 ] as const satisfies readonly ResourceKind[]
 
-export class PdfFileFailure extends Error {
+export class StoredFileFailure extends Error {
   constructor(message: string, readonly status: number) {
     super(message)
   }
 }
 
-export interface PdfUpload {
+export interface StoredUpload {
   body: ReadableStream<Uint8Array>
   completion: Promise<void>
   cancel(reason?: unknown): Promise<void>
   sizeBytes: number
   filename: string
   kind: ResourceKind
+  format: 'PDF' | 'MP3'
+  mimeType: 'application/pdf' | 'audio/mpeg'
+  extension: '.pdf' | '.mp3'
 }
 
-export interface StoredPdf {
+export interface StoredFile {
   storage_key: string
   filename: string
   mime_type: string
@@ -31,22 +34,35 @@ export interface StoredPdf {
   etag: string | null
 }
 
-export function pdfStorageKey(paperId: number): string {
-  return `papers/${paperId}/${crypto.randomUUID()}.pdf`
+interface UploadSpec {
+  format: StoredUpload['format']
+  mimeType: StoredUpload['mimeType']
+  extension: StoredUpload['extension']
+  label: 'PDF' | 'MP3'
 }
 
-function uploadFilename(value: string | null): string {
-  if (!value) throw new PdfFileFailure('filename is required', 400)
+function uploadSpec(kind: ResourceKind): UploadSpec {
+  return kind === 'listening_audio'
+    ? { format: 'MP3', mimeType: 'audio/mpeg', extension: '.mp3', label: 'MP3' }
+    : { format: 'PDF', mimeType: 'application/pdf', extension: '.pdf', label: 'PDF' }
+}
+
+export function storedFileKey(paperId: number, extension: StoredUpload['extension']): string {
+  return `papers/${paperId}/${crypto.randomUUID()}${extension}`
+}
+
+function uploadFilename(value: string | null, spec: UploadSpec): string {
+  if (!value) throw new StoredFileFailure('filename is required', 400)
   const filename = value.trim()
-  if (!filename || filename.length > 180 || filename.includes('/') || filename.includes('\\') || !filename.toLowerCase().endsWith('.pdf')) {
-    throw new PdfFileFailure('filename must be a valid .pdf filename', 400)
+  if (!filename || filename.length > 180 || filename.includes('/') || filename.includes('\\') || !filename.toLowerCase().endsWith(spec.extension)) {
+    throw new StoredFileFailure(`filename must be a valid ${spec.extension} filename`, 400)
   }
   return filename
 }
 
 export function resourceKindValue(value: unknown, name = 'kind'): ResourceKind {
   const kind = value === undefined || value === null || value === '' ? 'question' : String(value).trim()
-  if (!RESOURCE_KINDS.includes(kind as ResourceKind)) throw new PdfFileFailure(`Invalid ${name}`, 400)
+  if (!RESOURCE_KINDS.includes(kind as ResourceKind)) throw new StoredFileFailure(`Invalid ${name}`, 400)
   return kind as ResourceKind
 }
 
@@ -56,34 +72,35 @@ function numericByteLength(value: string | null): number | null {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null
 }
 
-export async function readPdfUpload(request: Request, url: URL, usedBytes: number): Promise<PdfUpload> {
-  if (request.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() !== 'application/pdf') {
-    throw new PdfFileFailure('Content-Type must be application/pdf', 415)
-  }
-  const filename = uploadFilename(url.searchParams.get('filename'))
+export async function readStoredUpload(request: Request, url: URL, usedBytes: number): Promise<StoredUpload> {
   const kind = resourceKindValue(url.searchParams.get('kind'))
+  const spec = uploadSpec(kind)
+  if (request.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() !== spec.mimeType) {
+    throw new StoredFileFailure(`Content-Type must be ${spec.mimeType}`, 415)
+  }
+  const filename = uploadFilename(url.searchParams.get('filename'), spec)
   const contentLengthHeader = request.headers.get('content-length')
   const browserSizeHeader = request.headers.get('x-ceepp-file-size')
   if (contentLengthHeader === null && browserSizeHeader === null) {
-    throw new PdfFileFailure('Content-Length or X-CEEPP-File-Size is required for PDF uploads', 411)
+    throw new StoredFileFailure(`Content-Length or X-CEEPP-File-Size is required for ${spec.label} uploads`, 411)
   }
   const contentLength = numericByteLength(contentLengthHeader)
   const browserSize = numericByteLength(browserSizeHeader)
   if ((contentLengthHeader !== null && contentLength === null)
     || (browserSizeHeader !== null && browserSize === null)) {
-    throw new PdfFileFailure('PDF byte length must be a non-negative integer', 400)
+    throw new StoredFileFailure(`${spec.label} byte length must be a non-negative integer`, 400)
   }
   if (contentLength !== null && browserSize !== null && contentLength !== browserSize) {
-    throw new PdfFileFailure('PDF byte length headers do not match', 400)
+    throw new StoredFileFailure(`${spec.label} byte length headers do not match`, 400)
   }
   const declaredLength = contentLength ?? browserSize!
-  if (declaredLength > MAX_PDF_BYTES) throw new PdfFileFailure('PDF exceeds the 20 MiB limit', 413)
+  if (declaredLength > MAX_FILE_BYTES) throw new StoredFileFailure(`${spec.label} exceeds the 20 MiB limit`, 413)
   if (usedBytes >= PAPER_STORAGE_SOFT_LIMIT_BYTES
     || usedBytes + declaredLength > PAPER_STORAGE_SOFT_LIMIT_BYTES) {
-    throw new PdfFileFailure('PDF storage has reached the 900 MiB safety limit', 507)
+    throw new StoredFileFailure('File storage has reached the 900 MiB safety limit', 507)
   }
 
-  if (!request.body) throw new PdfFileFailure('PDF body is required', 400)
+  if (!request.body) throw new StoredFileFailure(`${spec.label} body is required`, 400)
   const reader = request.body.getReader()
   const buffered: Uint8Array[] = []
   const signature = new Uint8Array(5)
@@ -97,16 +114,22 @@ export async function readPdfUpload(request: Request, url: URL, usedBytes: numbe
     receivedBytes += chunk.byteLength
     if (receivedBytes > declaredLength) {
       await reader.cancel()
-      throw new PdfFileFailure('Declared PDF size does not match the PDF body', 400)
+      throw new StoredFileFailure(`Declared ${spec.label} size does not match the ${spec.label} body`, 400)
     }
     buffered.push(chunk)
     const copied = Math.min(signature.byteLength - signatureBytes, chunk.byteLength)
     signature.set(chunk.subarray(0, copied), signatureBytes)
     signatureBytes += copied
   }
-  if (signatureBytes !== signature.byteLength || String.fromCharCode(...signature) !== '%PDF-') {
+  const isPdf = String.fromCharCode(...signature) === '%PDF-'
+  const isMp3 = signature[0] === 0x49 && signature[1] === 0x44 && signature[2] === 0x33
+    || signature[0] === 0xff && (signature[1] & 0xe0) === 0xe0
+      && ((signature[1] >> 3) & 0x03) !== 0x01 && ((signature[1] >> 1) & 0x03) !== 0x00
+      && (signature[2] >> 4) !== 0x00 && (signature[2] >> 4) !== 0x0f
+      && ((signature[2] >> 2) & 0x03) !== 0x03
+  if (signatureBytes !== signature.byteLength || (spec.format === 'PDF' ? !isPdf : !isMp3)) {
     await reader.cancel()
-    throw new PdfFileFailure('File content is not a PDF', 400)
+    throw new StoredFileFailure(`File content is not ${spec.label}`, 400)
   }
 
   const fixed = new FixedLengthStream(declaredLength)
@@ -121,24 +144,24 @@ export async function readPdfUpload(request: Request, url: URL, usedBytes: numbe
         const result = await reader.read()
         if (result.done) break
         receivedBytes += result.value.byteLength
-        if (receivedBytes > declaredLength) throw new PdfFileFailure('Declared PDF size does not match the PDF body', 400)
+        if (receivedBytes > declaredLength) throw new StoredFileFailure(`Declared ${spec.label} size does not match the ${spec.label} body`, 400)
         await writer.write(result.value)
       }
-      if (receivedBytes !== declaredLength) throw new PdfFileFailure('Declared PDF size does not match the PDF body', 400)
+      if (receivedBytes !== declaredLength) throw new StoredFileFailure(`Declared ${spec.label} size does not match the ${spec.label} body`, 400)
       await writer.close()
     } catch (error) {
-      const failure = error instanceof PdfFileFailure
+      const failure = error instanceof StoredFileFailure
         ? error
-        : new PdfFileFailure('Could not read the PDF upload stream', 400)
+        : new StoredFileFailure(`Could not read the ${spec.label} upload stream`, 400)
       await cancel(failure)
       throw failure
     }
   })()
-  return { body: fixed.readable, completion, cancel, sizeBytes: declaredLength, filename, kind }
+  return { body: fixed.readable, completion, cancel, sizeBytes: declaredLength, filename, kind, ...spec }
 }
 
 function encodedDisposition(filename: string, download: boolean): string {
-  const safeFallback = filename.replaceAll(/[^\x20-\x7e]/g, '_').replaceAll(/["\\]/g, '') || 'paper.pdf'
+  const safeFallback = filename.replaceAll(/[^\x20-\x7e]/g, '_').replaceAll(/["\\]/g, '') || 'resource'
   return `${download ? 'attachment' : 'inline'}; filename="${safeFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`
 }
 
@@ -152,17 +175,17 @@ function byteRange(value: string | null, size: number): ByteRange | null {
   if (!value) return null
   if (value.includes(',')) return null
   const match = /^bytes=(\d*)-(\d*)$/.exec(value.trim())
-  if (!match || (!match[1] && !match[2]) || size < 1) throw new PdfFileFailure('Invalid byte range', 416)
+  if (!match || (!match[1] && !match[2]) || size < 1) throw new StoredFileFailure('Invalid byte range', 416)
   if (!match[1]) {
     const suffix = Number(match[2])
-    if (!Number.isSafeInteger(suffix) || suffix < 1) throw new PdfFileFailure('Invalid byte range', 416)
+    if (!Number.isSafeInteger(suffix) || suffix < 1) throw new StoredFileFailure('Invalid byte range', 416)
     const length = Math.min(suffix, size)
     return { offset: size - length, length, end: size - 1 }
   }
   const offset = Number(match[1])
   const requestedEnd = match[2] ? Number(match[2]) : size - 1
   if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(requestedEnd) || offset < 0 || requestedEnd < offset || offset >= size) {
-    throw new PdfFileFailure('Invalid byte range', 416)
+    throw new StoredFileFailure('Invalid byte range', 416)
   }
   const end = Math.min(requestedEnd, size - 1)
   return { offset, length: end - offset + 1, end }
@@ -203,7 +226,7 @@ function rangedStream(source: ReadableStream, range: ByteRange): ReadableStream<
         const result = await reader.read()
         if (result.done) {
           settled = true
-          controller.error(new Error('Stored PDF ended before its declared size'))
+          controller.error(new Error('Stored file ended before its declared size'))
           return
         }
 
@@ -234,10 +257,10 @@ function rangedStream(source: ReadableStream, range: ByteRange): ReadableStream<
   })
 }
 
-export async function pdfFileResponse(
+export async function storedFileResponse(
   request: Request,
   namespace: KVNamespace,
-  file: StoredPdf,
+  file: StoredFile,
   download: boolean,
   privateFile: boolean,
 ): Promise<Response> {
@@ -252,7 +275,7 @@ export async function pdfFileResponse(
     || !Number.isSafeInteger(metadata.sizeBytes)
     || (metadata.sizeBytes as number) < 1) {
     if (stored.value) await cancelStream(stored.value)
-    throw new PdfFileFailure('PDF file is missing', 404)
+    throw new StoredFileFailure('Stored file is missing', 404)
   }
   const etag = metadata.etag
   const size = metadata.sizeBytes as number
@@ -293,7 +316,7 @@ export async function pdfFileResponse(
       try {
         range = byteRange(rangeHeader, size)
       } catch (error) {
-        if (error instanceof PdfFileFailure && error.status === 416) {
+        if (error instanceof StoredFileFailure && error.status === 416) {
           await cancelStream(stored.value)
           return new Response(null, {
             status: 416,
