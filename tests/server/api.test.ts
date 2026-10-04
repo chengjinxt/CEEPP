@@ -7,8 +7,17 @@ type TestEnv = ServerEnv & {
   TEST_MIGRATIONS: Parameters<typeof applyD1Migrations>[1]
 }
 
+interface PdfKvMetadata {
+  etag: string
+  sizeBytes: number
+}
+
+const PDF_FILE_LIMIT_BYTES = 20 * 1024 * 1024
+const PAPER_KV_SOFT_LIMIT_BYTES = 900 * 1024 * 1024
+
 const env = workerEnv as unknown as TestEnv
 const database = env.DB
+const paperFiles = (workerEnv as unknown as { PAPER_FILES: KVNamespace }).PAPER_FILES
 const adminApp = createApp(async () => true)
 
 function rawRequest(path: string, method: string, body?: BodyInit, headers?: HeadersInit): Request {
@@ -90,8 +99,12 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await database.exec('DELETE FROM candidates; DELETE FROM resources; DELETE FROM r2_cleanup_queue; DELETE FROM paper_regions; DELETE FROM papers;')
-  const objects = await env.PAPER_FILES.list()
-  if (objects.objects.length) await env.PAPER_FILES.delete(objects.objects.map((object) => object.key))
+  let cursor: string | undefined
+  do {
+    const page = await paperFiles.list({ cursor })
+    await Promise.all(page.keys.map((key) => paperFiles.delete(key.name)))
+    cursor = page.list_complete ? undefined : page.cursor
+  } while (cursor)
 })
 
 describe('public paper API', () => {
@@ -278,6 +291,14 @@ describe('admin paper and candidate API', () => {
     expect(resource.url).toMatch(/^\/admin\/api\/resources\/\d+\/file$/)
     expect(resource.downloadUrl).toMatch(/^\/admin\/api\/resources\/\d+\/file\?download=1$/)
     expect(resource).not.toHaveProperty('storageKey')
+    expect((await worker.fetch(request(resource.url as string), env)).status).toBe(403)
+    const stored = await database.prepare('SELECT storage_key FROM resources WHERE id = ?')
+      .bind(resource.id).first<{ storage_key: string }>()
+    const storedPdf = await paperFiles.getWithMetadata<PdfKvMetadata>(stored!.storage_key, 'arrayBuffer')
+    expect(storedPdf.metadata).toEqual({
+      etag: expect.stringMatching(/^"[0-9a-f-]+"$/u),
+      sizeBytes: pdf.byteLength,
+    })
 
     const update = await admin(`/admin/api/papers/${paperId}`, 'PUT', {
       ...mathPaper,
@@ -292,15 +313,14 @@ describe('admin paper and candidate API', () => {
     const paperId = await createPaper()
     let publicationStatus = 0
     let deletedKey = ''
-    const racingBucket = {
+    const racingNamespace = {
       put: async (_key: string, value: unknown) => {
         if (value instanceof ReadableStream) await new Response(value).arrayBuffer()
         publicationStatus = (await admin(`/admin/api/papers/${paperId}/status`, 'POST', { status: 'published' })).status
-        return { etag: 'race-etag' }
       },
       delete: async (key: string) => { deletedKey = key },
-    } as unknown as R2Bucket
-    const racingEnv = { DB: database, PAPER_FILES: racingBucket } as ServerEnv
+    } as unknown as KVNamespace
+    const racingEnv = { DB: database, PAPER_FILES: racingNamespace } as unknown as ServerEnv
     const response = await createApp(async () => true).fetch(rawRequest(
       `/admin/api/papers/${paperId}/resources/pdf?filename=race.pdf&kind=question`,
       'POST',
@@ -319,16 +339,15 @@ describe('admin paper and candidate API', () => {
   it('keeps a durable cleanup marker when an uncommitted upload cannot be removed immediately', async () => {
     const paperId = await createPaper()
     let storageKey = ''
-    const unavailableCleanupBucket = {
-      put: async (key: string, value: ReadableStream<Uint8Array>, options: R2PutOptions) => {
+    const unavailableCleanupNamespace = {
+      put: async (key: string, value: ReadableStream<Uint8Array>, options: KVNamespacePutOptions) => {
         storageKey = key
-        const stored = await env.PAPER_FILES.put(key, value, options)
+        await paperFiles.put(key, value, options)
         expect((await admin(`/admin/api/papers/${paperId}/status`, 'POST', { status: 'published' })).status).toBe(200)
-        return stored
       },
-      delete: async () => { throw new Error('R2 temporarily unavailable') },
-    } as unknown as R2Bucket
-    const unavailableEnv = { DB: database, PAPER_FILES: unavailableCleanupBucket } as ServerEnv
+      delete: async () => { throw new Error('KV temporarily unavailable') },
+    } as unknown as KVNamespace
+    const unavailableEnv = { DB: database, PAPER_FILES: unavailableCleanupNamespace } as unknown as ServerEnv
     const response = await createApp(async () => true).fetch(rawRequest(
       `/admin/api/papers/${paperId}/resources/pdf?filename=orphan-retry.pdf&kind=question`,
       'POST',
@@ -338,14 +357,14 @@ describe('admin paper and candidate API', () => {
 
     expect(response.status).toBe(409)
     expect(storageKey).toMatch(new RegExp(`^papers/${paperId}/.+\\.pdf$`))
-    expect(await env.PAPER_FILES.head(storageKey)).not.toBeNull()
+    expect(await paperFiles.get(storageKey, 'arrayBuffer')).not.toBeNull()
     expect(await database.prepare('SELECT reason, attempts FROM r2_cleanup_queue WHERE storage_key = ?')
       .bind(storageKey).first()).toMatchObject({ reason: 'upload_pending', attempts: 1 })
 
     await database.prepare("UPDATE r2_cleanup_queue SET created_at = datetime('now', '-1 day') WHERE storage_key = ?")
       .bind(storageKey).run()
     await cleanupScheduled(env)
-    expect(await env.PAPER_FILES.head(storageKey)).toBeNull()
+    expect(await paperFiles.get(storageKey, 'arrayBuffer')).toBeNull()
     expect(await database.prepare('SELECT storage_key FROM r2_cleanup_queue WHERE storage_key = ?')
       .bind(storageKey).first()).toBeNull()
   })
@@ -362,13 +381,12 @@ describe('admin paper and candidate API', () => {
     const stored = new Promise<void>((resolve) => { signalStored = resolve })
     const cleanupStarted = new Promise<void>((resolve) => { signalCleanupStarted = resolve })
     let deleteCalls = 0
-    const barrierBucket = {
-      put: async (key: string, value: ReadableStream<Uint8Array>, options: R2PutOptions) => {
+    const barrierNamespace = {
+      put: async (key: string, value: ReadableStream<Uint8Array>, options: KVNamespacePutOptions) => {
         storageKey = key
-        const result = await env.PAPER_FILES.put(key, value, options)
+        await paperFiles.put(key, value, options)
         signalStored()
         await putRelease
-        return result
       },
       delete: async (key: string) => {
         deleteCalls += 1
@@ -376,10 +394,10 @@ describe('admin paper and candidate API', () => {
           signalCleanupStarted()
           await firstDeleteRelease
         }
-        await env.PAPER_FILES.delete(key)
+        await paperFiles.delete(key)
       },
-    } as unknown as R2Bucket
-    const barrierEnv = { DB: database, PAPER_FILES: barrierBucket } as ServerEnv
+    } as unknown as KVNamespace
+    const barrierEnv = { DB: database, PAPER_FILES: barrierNamespace } as unknown as ServerEnv
 
     const uploadPromise = createApp(async () => true).fetch(rawRequest(
       `/admin/api/papers/${paperId}/resources/pdf?filename=claimed-race.pdf&kind=question`,
@@ -403,7 +421,7 @@ describe('admin paper and candidate API', () => {
       .bind(storageKey).first()).toBeNull()
     expect(await database.prepare('SELECT storage_key FROM r2_cleanup_queue WHERE storage_key = ?')
       .bind(storageKey).first()).toBeNull()
-    expect(await env.PAPER_FILES.head(storageKey)).toBeNull()
+    expect(await paperFiles.get(storageKey, 'arrayBuffer')).toBeNull()
   })
 
   it('recreates an upload cleanup marker if an object appears after an earlier empty cleanup', async () => {
@@ -414,20 +432,20 @@ describe('admin paper and candidate API', () => {
     const putStarted = new Promise<void>((resolve) => { signalPutStarted = resolve })
     const putRelease = new Promise<void>((resolve) => { releasePut = resolve })
     let deleteCalls = 0
-    const lateObjectBucket = {
-      put: async (key: string, value: ReadableStream<Uint8Array>, options: R2PutOptions) => {
+    const lateObjectNamespace = {
+      put: async (key: string, value: ReadableStream<Uint8Array>, options: KVNamespacePutOptions) => {
         storageKey = key
         signalPutStarted()
         await putRelease
-        return env.PAPER_FILES.put(key, value, options)
+        return paperFiles.put(key, value, options)
       },
       delete: async (key: string) => {
         deleteCalls += 1
-        if (deleteCalls === 1) return env.PAPER_FILES.delete(key)
-        throw new Error('R2 unavailable after the late upload completed')
+        if (deleteCalls === 1) return paperFiles.delete(key)
+        throw new Error('KV unavailable after the late upload completed')
       },
-    } as unknown as R2Bucket
-    const lateObjectEnv = { DB: database, PAPER_FILES: lateObjectBucket } as ServerEnv
+    } as unknown as KVNamespace
+    const lateObjectEnv = { DB: database, PAPER_FILES: lateObjectNamespace } as unknown as ServerEnv
     const uploadPromise = createApp(async () => true).fetch(rawRequest(
       `/admin/api/papers/${paperId}/resources/pdf?filename=late-object.pdf&kind=question`,
       'POST',
@@ -445,7 +463,7 @@ describe('admin paper and candidate API', () => {
     releasePut()
     const upload = await uploadPromise
     expect(upload.status).toBe(409)
-    expect(await env.PAPER_FILES.head(storageKey)).not.toBeNull()
+    expect(await paperFiles.get(storageKey, 'arrayBuffer')).not.toBeNull()
     expect(await database.prepare(`SELECT size_bytes, reason, attempts, claimed_at
       FROM r2_cleanup_queue WHERE storage_key = ?`).bind(storageKey).first()).toMatchObject({
       size_bytes: 20, reason: 'upload_pending', attempts: 1, claimed_at: null,
@@ -454,28 +472,27 @@ describe('admin paper and candidate API', () => {
     await database.prepare("UPDATE r2_cleanup_queue SET created_at = datetime('now', '-1 day') WHERE storage_key = ?")
       .bind(storageKey).run()
     await cleanupScheduled(env)
-    expect(await env.PAPER_FILES.head(storageKey)).toBeNull()
+    expect(await paperFiles.get(storageKey, 'arrayBuffer')).toBeNull()
     expect(await database.prepare('SELECT storage_key FROM r2_cleanup_queue WHERE storage_key = ?')
       .bind(storageKey).first()).toBeNull()
   })
 
-  it('rechecks the storage limit atomically after the R2 write', async () => {
+  it('rechecks the storage limit atomically after the KV write', async () => {
     const paperId = await createPaper({ ...mathPaper, resources: [] })
     const otherPaperId = await createPaper({ ...mathPaper, title: '另一份草稿', resources: [] })
     let deleted = false
-    const racingBucket = {
+    const racingNamespace = {
       put: async (_key: string, value: unknown) => {
         if (value instanceof ReadableStream) await new Response(value).arrayBuffer()
         await database.prepare(`INSERT INTO resources
           (paper_id, format, kind, storage_type, storage_key, filename, mime_type, size_bytes)
           VALUES (?, 'PDF', 'question', 'upload', ?, 'existing.pdf', 'application/pdf', ?)`)
-          .bind(otherPaperId, 'test/concurrent-existing.pdf', 9 * 1024 * 1024 * 1024)
+          .bind(otherPaperId, 'test/concurrent-existing.pdf', PAPER_KV_SOFT_LIMIT_BYTES)
           .run()
-        return { etag: 'race-etag' }
       },
       delete: async () => { deleted = true },
-    } as unknown as R2Bucket
-    const racingEnv = { DB: database, PAPER_FILES: racingBucket } as ServerEnv
+    } as unknown as KVNamespace
+    const racingEnv = { DB: database, PAPER_FILES: racingNamespace } as unknown as ServerEnv
     const response = await createApp(async () => true).fetch(rawRequest(
       `/admin/api/papers/${paperId}/resources/pdf?filename=over-limit-race.pdf&kind=question`,
       'POST',
@@ -487,12 +504,12 @@ describe('admin paper and candidate API', () => {
     expect(deleted).toBe(true)
     const usage = await database.prepare("SELECT SUM(size_bytes) AS bytes FROM resources WHERE storage_type = 'upload'")
       .first<{ bytes: number }>()
-    expect(usage?.bytes).toBe(9 * 1024 * 1024 * 1024)
+    expect(usage?.bytes).toBe(PAPER_KV_SOFT_LIMIT_BYTES)
   })
 
-  it('reserves PDF capacity atomically before concurrent uploads write to R2', async () => {
+  it('reserves PDF capacity atomically before concurrent uploads write to KV', async () => {
     const paperId = await createPaper({ ...mathPaper, resources: [] })
-    const limit = 9 * 1024 * 1024 * 1024
+    const limit = PAPER_KV_SOFT_LIMIT_BYTES
     const pdf = new TextEncoder().encode('%PDF-1.7')
     await database.prepare(`INSERT INTO resources
       (paper_id, format, kind, storage_type, storage_key, filename, mime_type, size_bytes)
@@ -531,7 +548,7 @@ describe('admin paper and candidate API', () => {
         }
       },
     }) as D1Database
-    const barrierEnv = { DB: barrierDb, PAPER_FILES: env.PAPER_FILES } as ServerEnv
+    const barrierEnv = { DB: barrierDb, PAPER_FILES: paperFiles } as unknown as ServerEnv
     const app = createApp(async () => true)
     const upload = (name: string) => app.fetch(rawRequest(
       `/admin/api/papers/${paperId}/resources/pdf?filename=${name}&kind=question`,
@@ -544,7 +561,7 @@ describe('admin paper and candidate API', () => {
       .first<{ bytes: number }>())?.bytes).toBe(limit)
     expect((await database.prepare('SELECT COUNT(*) AS count FROM r2_cleanup_queue')
       .first<{ count: number }>())?.count).toBe(0)
-    expect((await env.PAPER_FILES.list()).objects).toHaveLength(1)
+    expect((await paperFiles.list()).keys).toHaveLength(1)
   })
 
   it('keeps draft PDF private, then supports online viewing, HEAD, download and byte ranges after publication', async () => {
@@ -632,7 +649,53 @@ describe('admin paper and candidate API', () => {
     expect(download.headers.get('content-disposition')).toContain('attachment')
   })
 
-  it('uses current R2 metadata for conditional requests and never serves stale ranges', async () => {
+  it('streams full and ranged PDF responses without buffering the KV value', async () => {
+    const paperId = await createPaper({ ...mathPaper, resources: [] })
+    const pdf = new TextEncoder().encode('%PDF-1.7\n0123456789')
+    const uploaded = await adminRaw(
+      `/admin/api/papers/${paperId}/resources/pdf?filename=read-mode.pdf&kind=question`,
+      'POST',
+      pdf,
+      { 'content-type': 'application/pdf' },
+    )
+    const resourceId = (await uploaded.json() as { id: number }).id
+    expect((await admin(`/admin/api/papers/${paperId}/status`, 'POST', { status: 'published' })).status).toBe(200)
+
+    const readTypes: Array<string | undefined> = []
+    const observingNamespace = {
+      getWithMetadata: (key: string, type?: string) => {
+        readTypes.push(type)
+        if (type === 'stream') return paperFiles.getWithMetadata(key, 'stream')
+        if (type === 'arrayBuffer') return paperFiles.getWithMetadata(key, 'arrayBuffer')
+        return paperFiles.getWithMetadata(key)
+      },
+    } as unknown as KVNamespace
+    const observingEnv = { DB: database, PAPER_FILES: observingNamespace } as unknown as ServerEnv
+
+    const full = await worker.fetch(request(`/api/resources/${resourceId}/file`), observingEnv)
+    expect(full.status).toBe(200)
+    expect(new Uint8Array(await full.arrayBuffer())).toEqual(pdf)
+    const etag = full.headers.get('etag')!
+
+    const head = await worker.fetch(rawRequest(`/api/resources/${resourceId}/file`, 'HEAD'), observingEnv)
+    expect(head.status).toBe(200)
+    expect((await head.arrayBuffer()).byteLength).toBe(0)
+
+    const notModified = await worker.fetch(rawRequest(
+      `/api/resources/${resourceId}/file`, 'GET', undefined, { 'if-none-match': etag },
+    ), observingEnv)
+    expect(notModified.status).toBe(304)
+
+    const range = await worker.fetch(rawRequest(
+      `/api/resources/${resourceId}/file`, 'GET', undefined, { range: 'bytes=5-8' },
+    ), observingEnv)
+    expect(range.status).toBe(206)
+    expect(range.headers.get('content-range')).toBe(`bytes 5-8/${pdf.byteLength}`)
+    expect(new TextDecoder().decode(await range.arrayBuffer())).toBe('1.7\n')
+    expect(readTypes).toEqual(['stream', 'stream', 'stream', 'stream'])
+  })
+
+  it('uses current KV metadata for conditional requests and never serves stale ranges', async () => {
     const paperId = await createPaper({ ...mathPaper, resources: [] })
     const firstPdf = new TextEncoder().encode('%PDF-1.7\nfirst-version')
     const uploaded = await adminRaw(
@@ -650,13 +713,18 @@ describe('admin paper and candidate API', () => {
       .first<{ storage_key: string }>()
 
     const secondPdf = new TextEncoder().encode('%PDF-1.7\nsecond-version-is-longer')
-    await env.PAPER_FILES.put(stored!.storage_key, secondPdf, { httpMetadata: { contentType: 'application/pdf' } })
+    const firstStored = await paperFiles.getWithMetadata<PdfKvMetadata>(stored!.storage_key, 'arrayBuffer')
+    expect(firstStored.metadata).toMatchObject({ etag: oldEtag, sizeBytes: firstPdf.byteLength })
+    const replacementEtag = '"kv-second-version"'
+    await paperFiles.put(stored!.storage_key, secondPdf, {
+      metadata: { etag: replacementEtag, sizeBytes: secondPdf.byteLength } satisfies PdfKvMetadata,
+    })
 
     const changed = await worker.fetch(rawRequest(
       `/api/resources/${resourceId}/file`, 'GET', undefined, { 'if-none-match': oldEtag },
     ), env)
     expect(changed.status).toBe(200)
-    expect(changed.headers.get('etag')).not.toBe(oldEtag)
+    expect(changed.headers.get('etag')).toBe(replacementEtag)
     expect(changed.headers.get('content-length')).toBe(String(secondPdf.byteLength))
     expect(new Uint8Array(await changed.arrayBuffer())).toEqual(secondPdf)
 
@@ -667,11 +735,32 @@ describe('admin paper and candidate API', () => {
     expect(staleRange.status).toBe(200)
     expect(new Uint8Array(await staleRange.arrayBuffer())).toEqual(secondPdf)
 
-    await env.PAPER_FILES.delete(stored!.storage_key)
+    await paperFiles.delete(stored!.storage_key)
     const missing = await worker.fetch(rawRequest(
       `/api/resources/${resourceId}/file`, 'GET', undefined, { 'if-none-match': oldEtag },
     ), env)
     expect(missing.status).toBe(404)
+  })
+
+  it('returns 404 when a stored KV PDF has no integrity metadata', async () => {
+    const paperId = await createPaper({ ...mathPaper, resources: [] })
+    const pdf = new TextEncoder().encode('%PDF-1.7\nmissing metadata')
+    const uploaded = await adminRaw(
+      `/admin/api/papers/${paperId}/resources/pdf?filename=missing-metadata.pdf&kind=question`,
+      'POST',
+      pdf,
+      { 'content-type': 'application/pdf' },
+    )
+    const resourceId = (await uploaded.json() as { id: number }).id
+    const stored = await database.prepare('SELECT storage_key FROM resources WHERE id = ?').bind(resourceId)
+      .first<{ storage_key: string }>()
+    const value = await paperFiles.get(stored!.storage_key, 'arrayBuffer')
+    expect(value).not.toBeNull()
+    await paperFiles.put(stored!.storage_key, value!)
+    expect((await admin(`/admin/api/papers/${paperId}/status`, 'POST', { status: 'published' })).status).toBe(200)
+
+    expect((await adminRaw(`/admin/api/resources/${resourceId}/file`, 'GET')).status).toBe(404)
+    expect((await worker.fetch(request(`/api/resources/${resourceId}/file`), env)).status).toBe(404)
   })
 
   it('validates PDF uploads and only accepts them while a paper is a draft', async () => {
@@ -724,9 +813,10 @@ describe('admin paper and candidate API', () => {
       `/admin/api/papers/${paperId}/resources/pdf?filename=large.pdf&kind=question`,
       'POST',
       new TextEncoder().encode('%PDF-1.7'),
-      { 'content-type': 'application/pdf', 'content-length': String(50 * 1024 * 1024 + 1) },
+      { 'content-type': 'application/pdf', 'content-length': String(PDF_FILE_LIMIT_BYTES + 1) },
     )
     expect(tooLarge.status).toBe(413)
+    expect((await tooLarge.json() as { error: string }).error).toContain('20 MiB')
 
     await admin(`/admin/api/papers/${paperId}`, 'PUT', mathPaper)
     await admin(`/admin/api/papers/${paperId}/status`, 'POST', { status: 'published' })
@@ -739,12 +829,12 @@ describe('admin paper and candidate API', () => {
     expect(publishedUpload.status).toBe(409)
   })
 
-  it('stops uploads before the private bucket exceeds the 9 GiB free-tier safety limit', async () => {
+  it('stops uploads before the private KV namespace exceeds the 900 MiB pilot limit', async () => {
     const paperId = await createPaper({ ...mathPaper, resources: [] })
     await database.prepare(`INSERT INTO resources
       (paper_id, format, kind, storage_type, storage_key, filename, mime_type, size_bytes)
       VALUES (?, 'PDF', 'question', 'upload', ?, 'existing.pdf', 'application/pdf', ?)`)
-      .bind(paperId, 'test/existing.pdf', 9 * 1024 * 1024 * 1024)
+      .bind(paperId, 'test/existing.pdf', PAPER_KV_SOFT_LIMIT_BYTES)
       .run()
 
     const response = await adminRaw(
@@ -754,14 +844,14 @@ describe('admin paper and candidate API', () => {
       { 'content-type': 'application/pdf' },
     )
     expect(response.status).toBe(507)
-    expect((await response.json() as { error: string }).error).toContain('9 GiB')
-    expect((await env.PAPER_FILES.list()).objects).toHaveLength(0)
+    expect((await response.json() as { error: string }).error).toContain('900 MiB')
+    expect((await paperFiles.list()).keys).toHaveLength(0)
   })
 
   it('counts queued orphan objects toward the PDF storage safety limit', async () => {
     const paperId = await createPaper({ ...mathPaper, resources: [] })
     await database.prepare(`INSERT INTO r2_cleanup_queue (storage_key, size_bytes, reason)
-      VALUES ('orphan/full.pdf', ?, 'upload_pending')`).bind(9 * 1024 * 1024 * 1024).run()
+      VALUES ('orphan/full.pdf', ?, 'upload_pending')`).bind(PAPER_KV_SOFT_LIMIT_BYTES).run()
 
     const response = await adminRaw(
       `/admin/api/papers/${paperId}/resources/pdf?filename=over-queued-limit.pdf&kind=question`,
@@ -781,11 +871,11 @@ describe('admin paper and candidate API', () => {
       { 'content-type': 'application/pdf' },
     )
     const resourceId = (await uploaded.json() as { id: number }).id
-    expect((await env.PAPER_FILES.list()).objects).toHaveLength(1)
+    expect((await paperFiles.list()).keys).toHaveLength(1)
 
     const removed = await admin(`/admin/api/papers/${paperId}/resources/${resourceId}`, 'DELETE')
     expect(removed.status).toBe(204)
-    expect((await env.PAPER_FILES.list()).objects).toHaveLength(0)
+    expect((await paperFiles.list()).keys).toHaveLength(0)
     expect((await admin(`/admin/api/resources/${resourceId}/file`)).status).toBe(404)
   })
 
@@ -799,13 +889,13 @@ describe('admin paper and candidate API', () => {
     )
     const resourceId = (await uploaded.json() as { id: number }).id
     let publicationStatus = 0
-    const racingBucket = {
+    const racingNamespace = {
       delete: async (key: string) => {
         publicationStatus = (await admin(`/admin/api/papers/${paperId}/status`, 'POST', { status: 'published' })).status
-        await env.PAPER_FILES.delete(key)
+        await paperFiles.delete(key)
       },
-    } as unknown as R2Bucket
-    const racingEnv = { DB: database, PAPER_FILES: racingBucket } as ServerEnv
+    } as unknown as KVNamespace
+    const racingEnv = { DB: database, PAPER_FILES: racingNamespace } as unknown as ServerEnv
     const response = await createApp(async () => true).fetch(
       request(`/admin/api/papers/${paperId}/resources/${resourceId}`, 'DELETE'),
       racingEnv,
@@ -817,7 +907,7 @@ describe('admin paper and candidate API', () => {
     expect(paper?.status).toBe('draft')
   })
 
-  it('retries an uploaded-object deletion durably when R2 is temporarily unavailable', async () => {
+  it('retries an uploaded-object deletion durably when KV is temporarily unavailable', async () => {
     const paperId = await createPaper({ ...mathPaper, resources: [] })
     const uploaded = await adminRaw(
       `/admin/api/papers/${paperId}/resources/pdf?filename=retry-delete.pdf&kind=question`,
@@ -829,10 +919,10 @@ describe('admin paper and candidate API', () => {
     const stored = await database.prepare('SELECT storage_key FROM resources WHERE id = ?').bind(resourceId)
       .first<{ storage_key: string }>()
 
-    const unavailableBucket = {
-      delete: async () => { throw new Error('R2 temporarily unavailable') },
-    } as unknown as R2Bucket
-    const unavailableEnv = { DB: database, PAPER_FILES: unavailableBucket } as ServerEnv
+    const unavailableNamespace = {
+      delete: async () => { throw new Error('KV temporarily unavailable') },
+    } as unknown as KVNamespace
+    const unavailableEnv = { DB: database, PAPER_FILES: unavailableNamespace } as unknown as ServerEnv
     const deletion = await createApp(async () => true).fetch(
       request(`/admin/api/papers/${paperId}/resources/${resourceId}`, 'DELETE'),
       unavailableEnv,
@@ -850,7 +940,7 @@ describe('admin paper and candidate API', () => {
       reason: 'deleted_resource',
       attempts: 1,
     })
-    expect(await env.PAPER_FILES.head(stored!.storage_key)).not.toBeNull()
+    expect(await paperFiles.get(stored!.storage_key, 'arrayBuffer')).not.toBeNull()
 
     await database.prepare("UPDATE r2_cleanup_queue SET created_at = datetime('now', '-1 day') WHERE storage_key = ?")
       .bind(stored!.storage_key).run()
@@ -858,7 +948,7 @@ describe('admin paper and candidate API', () => {
 
     expect(await database.prepare('SELECT storage_key FROM r2_cleanup_queue WHERE storage_key = ?')
       .bind(stored!.storage_key).first()).toBeNull()
-    expect(await env.PAPER_FILES.head(stored!.storage_key)).toBeNull()
+    expect(await paperFiles.get(stored!.storage_key, 'arrayBuffer')).toBeNull()
   })
 
   it('blocks every documented admin entry without Access while keeping the public API open', async () => {

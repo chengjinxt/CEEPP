@@ -1,7 +1,7 @@
 import type { ResourceKind } from '../shared/exam'
 
-export const MAX_PDF_BYTES = 50 * 1024 * 1024
-export const PAPER_BUCKET_SOFT_LIMIT_BYTES = 9 * 1024 * 1024 * 1024
+export const MAX_PDF_BYTES = 20 * 1024 * 1024
+export const PAPER_STORAGE_SOFT_LIMIT_BYTES = 900 * 1024 * 1024
 
 const RESOURCE_KINDS = [
   'question', 'answer', 'question_with_answer', 'analysis',
@@ -77,10 +77,10 @@ export async function readPdfUpload(request: Request, url: URL, usedBytes: numbe
     throw new PdfFileFailure('PDF byte length headers do not match', 400)
   }
   const declaredLength = contentLength ?? browserSize!
-  if (declaredLength > MAX_PDF_BYTES) throw new PdfFileFailure('PDF exceeds the 50 MiB limit', 413)
-  if (usedBytes >= PAPER_BUCKET_SOFT_LIMIT_BYTES
-    || usedBytes + declaredLength > PAPER_BUCKET_SOFT_LIMIT_BYTES) {
-    throw new PdfFileFailure('PDF storage has reached the 9 GiB safety limit', 507)
+  if (declaredLength > MAX_PDF_BYTES) throw new PdfFileFailure('PDF exceeds the 20 MiB limit', 413)
+  if (usedBytes >= PAPER_STORAGE_SOFT_LIMIT_BYTES
+    || usedBytes + declaredLength > PAPER_STORAGE_SOFT_LIMIT_BYTES) {
+    throw new PdfFileFailure('PDF storage has reached the 900 MiB safety limit', 507)
   }
 
   if (!request.body) throw new PdfFileFailure('PDF body is required', 400)
@@ -183,24 +183,81 @@ function weakEtagMatches(value: string | null, etag: string): boolean {
   }) ?? false
 }
 
+async function cancelStream(stream: ReadableStream): Promise<void> {
+  try {
+    await stream.cancel()
+  } catch {
+    // The response decision is already known; a failed best-effort cancellation must not replace it.
+  }
+}
+
+function rangedStream(source: ReadableStream, range: ByteRange): ReadableStream<Uint8Array> {
+  const reader = (source as ReadableStream<Uint8Array>).getReader()
+  let sourceOffset = 0
+  let remaining = range.length
+  let settled = false
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      while (remaining > 0) {
+        const result = await reader.read()
+        if (result.done) {
+          settled = true
+          controller.error(new Error('Stored PDF ended before its declared size'))
+          return
+        }
+
+        const chunk = result.value
+        const chunkOffset = sourceOffset
+        sourceOffset += chunk.byteLength
+        if (sourceOffset <= range.offset) continue
+
+        const start = Math.max(0, range.offset - chunkOffset)
+        const length = Math.min(chunk.byteLength - start, remaining)
+        if (length > 0) {
+          controller.enqueue(chunk.subarray(start, start + length))
+          remaining -= length
+        }
+        if (remaining === 0) {
+          settled = true
+          controller.close()
+          await reader.cancel()
+        }
+        return
+      }
+    },
+    async cancel(reason) {
+      if (settled) return
+      settled = true
+      await reader.cancel(reason)
+    },
+  })
+}
+
 export async function pdfFileResponse(
   request: Request,
-  bucket: R2Bucket,
+  namespace: KVNamespace,
   file: StoredPdf,
   download: boolean,
   privateFile: boolean,
 ): Promise<Response> {
   const cacheControl = privateFile ? 'private, no-store' : 'public, max-age=0, must-revalidate'
   const rangeHeader = request.method === 'GET' ? request.headers.get('range') : null
-  const needsMetadata = request.method === 'HEAD'
-    || rangeHeader !== null
-    || request.headers.has('if-match')
-    || request.headers.has('if-none-match')
-    || request.headers.has('if-range')
-  const metadata = needsMetadata ? await bucket.head(file.storage_key) : null
-  if (needsMetadata && !metadata) throw new PdfFileFailure('PDF file is missing', 404)
+  const stored = await namespace.getWithMetadata<{ etag?: unknown, sizeBytes?: unknown }>(file.storage_key, 'stream')
+  const metadata = stored.metadata
+  if (!stored.value
+    || !metadata
+    || typeof metadata.etag !== 'string'
+    || !/^"[^"\r\n]+"$/u.test(metadata.etag)
+    || !Number.isSafeInteger(metadata.sizeBytes)
+    || (metadata.sizeBytes as number) < 1) {
+    if (stored.value) await cancelStream(stored.value)
+    throw new PdfFileFailure('PDF file is missing', 404)
+  }
+  const etag = metadata.etag
+  const size = metadata.sizeBytes as number
 
-  const precondition = (etag: string): Response | null => {
+  const precondition = (): Response | null => {
     if (request.headers.has('if-match') && !strongEtagMatches(request.headers.get('if-match'), etag)) {
       return new Response(null, { status: 412, headers: { etag, 'cache-control': cacheControl } })
     }
@@ -209,9 +266,10 @@ export async function pdfFileResponse(
     }
     return null
   }
-  if (metadata) {
-    const conditional = precondition(metadata.httpEtag)
-    if (conditional) return conditional
+  const conditional = precondition()
+  if (conditional) {
+    await cancelStream(stored.value)
+    return conditional
   }
 
   if (request.method === 'HEAD') {
@@ -220,28 +278,30 @@ export async function pdfFileResponse(
       'content-disposition': encodedDisposition(file.filename, download),
       'accept-ranges': 'bytes',
       'cache-control': cacheControl,
-      'etag': metadata!.httpEtag,
-      'content-length': String(metadata!.size),
+      etag,
+      'content-length': String(size),
       'x-content-type-options': 'nosniff',
     })
+    await cancelStream(stored.value)
     return new Response(null, { status: 200, headers })
   }
 
   let range: ByteRange | null = null
   if (rangeHeader) {
     const ifRange = request.headers.get('if-range')
-    if (!ifRange || ifRange.trim() === metadata!.httpEtag) {
+    if (!ifRange || ifRange.trim() === etag) {
       try {
-        range = byteRange(rangeHeader, metadata!.size)
+        range = byteRange(rangeHeader, size)
       } catch (error) {
         if (error instanceof PdfFileFailure && error.status === 416) {
+          await cancelStream(stored.value)
           return new Response(null, {
             status: 416,
             headers: {
-              'content-range': `bytes */${metadata!.size}`,
+              'content-range': `bytes */${size}`,
               'accept-ranges': 'bytes',
               'cache-control': cacheControl,
-              etag: metadata!.httpEtag,
+              etag,
               'x-content-type-options': 'nosniff',
             },
           })
@@ -251,32 +311,22 @@ export async function pdfFileResponse(
     }
   }
 
-  let object = await bucket.get(file.storage_key, range ? { range: { offset: range.offset, length: range.length } } : undefined)
-  if (!object) throw new PdfFileFailure('PDF file is missing', 404)
-  if (metadata && range && object.httpEtag !== metadata.httpEtag) {
-    object = await bucket.get(file.storage_key)
-    range = null
-    if (!object) throw new PdfFileFailure('PDF file is missing', 404)
-  }
-
-  if (!metadata || object.httpEtag !== metadata.httpEtag) {
-    const conditional = precondition(object.httpEtag)
-    if (conditional) return conditional
-  }
-
   const headers = new Headers({
     'content-type': file.mime_type,
     'content-disposition': encodedDisposition(file.filename, download),
     'accept-ranges': 'bytes',
     'cache-control': cacheControl,
-    'etag': object.httpEtag,
+    etag,
     'x-content-type-options': 'nosniff',
   })
+  let body: ReadableStream
   if (range) {
     headers.set('content-length', String(range.length))
-    headers.set('content-range', `bytes ${range.offset}-${range.end}/${metadata!.size}`)
+    headers.set('content-range', `bytes ${range.offset}-${range.end}/${size}`)
+    body = rangedStream(stored.value, range)
   } else {
-    headers.set('content-length', String(object.size))
+    headers.set('content-length', String(size))
+    body = stored.value
   }
-  return new Response((object as R2ObjectBody).body, { status: range ? 206 : 200, headers })
+  return new Response(body, { status: range ? 206 : 200, headers })
 }

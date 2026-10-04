@@ -18,10 +18,10 @@
       "migrations_dir": "migrations"
     }
   ],
-  "r2_buckets": [
+  "kv_namespaces": [
     {
       "binding": "PAPER_FILES",
-      "bucket_name": "ceepp-papers"
+      "id": "18332fafefe24709aa6cc132a3dc18a0"
     }
   ],
   "triggers": {

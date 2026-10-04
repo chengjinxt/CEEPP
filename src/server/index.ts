@@ -9,7 +9,7 @@ import {
 } from '../shared/exam'
 import {
   PdfFileFailure,
-  PAPER_BUCKET_SOFT_LIMIT_BYTES,
+  PAPER_STORAGE_SOFT_LIMIT_BYTES,
   pdfFileResponse,
   pdfStorageKey,
   readPdfUpload,
@@ -19,7 +19,7 @@ import {
 
 export interface Env extends AccessEnv {
   DB: D1Database
-  PAPER_FILES: R2Bucket
+  PAPER_FILES: KVNamespace
   ASSETS?: { fetch(request: Request): Promise<Response> }
 }
 
@@ -506,13 +506,16 @@ async function uploadPaperPdf(request: Request, env: Env, url: URL, paperId: num
       WHERE COALESCE((SELECT SUM(size_bytes) FROM resources WHERE storage_type = 'upload'), 0)
         + COALESCE((SELECT SUM(size_bytes) FROM r2_cleanup_queue), 0) + ? <= ?
       RETURNING storage_key`)
-      .bind(storageKey, upload.sizeBytes, upload.sizeBytes, PAPER_BUCKET_SOFT_LIMIT_BYTES)
+      .bind(storageKey, upload.sizeBytes, upload.sizeBytes, PAPER_STORAGE_SOFT_LIMIT_BYTES)
       .first<{ storage_key: string }>()
-    if (!reserved) throw new PdfFileFailure('PDF storage has reached the 9 GiB safety limit', 507)
-    const [stored] = await Promise.all([
+    if (!reserved) throw new PdfFileFailure('PDF storage has reached the 900 MiB safety limit', 507)
+    const etag = `"${crypto.randomUUID()}"`
+    await Promise.all([
       env.PAPER_FILES.put(storageKey, upload.body, {
-        httpMetadata: { contentType: 'application/pdf' },
-        customMetadata: { filename: upload.filename, kind: upload.kind },
+        metadata: {
+          etag,
+          sizeBytes: upload.sizeBytes,
+        },
       }),
       upload.completion,
     ])
@@ -528,8 +531,8 @@ async function uploadPaperPdf(request: Request, env: Env, url: URL, paperId: num
           + ? <= ?
       RETURNING id, paper_id, format, kind, storage_type, url, link_type,
         source_name, source_url, access_code, verified_at, storage_key, filename, mime_type, size_bytes, etag`)
-      .bind(upload.kind, storageKey, upload.filename, upload.sizeBytes, stored.etag,
-        paperId, storageKey, storageKey, upload.sizeBytes, PAPER_BUCKET_SOFT_LIMIT_BYTES)
+      .bind(upload.kind, storageKey, upload.filename, upload.sizeBytes, etag,
+        paperId, storageKey, storageKey, upload.sizeBytes, PAPER_STORAGE_SOFT_LIMIT_BYTES)
       .first<ResourceRow>()
     if (!inserted) {
       const latestPaper = await env.DB.prepare('SELECT status FROM papers WHERE id = ?').bind(paperId).first<{ status: PaperStatus }>()
@@ -539,8 +542,8 @@ async function uploadPaperPdf(request: Request, env: Env, url: URL, paperId: num
           COALESCE((SELECT SUM(size_bytes) FROM resources WHERE storage_type = 'upload'), 0)
           + COALESCE((SELECT SUM(size_bytes) FROM r2_cleanup_queue WHERE storage_key <> ?), 0) AS bytes`)
         .bind(storageKey).first<{ bytes: number }>()
-      if ((latestUsage?.bytes ?? 0) + upload.sizeBytes > PAPER_BUCKET_SOFT_LIMIT_BYTES) {
-        throw new PdfFileFailure('PDF storage has reached the 9 GiB safety limit', 507)
+      if ((latestUsage?.bytes ?? 0) + upload.sizeBytes > PAPER_STORAGE_SOFT_LIMIT_BYTES) {
+        throw new PdfFileFailure('PDF storage has reached the 900 MiB safety limit', 507)
       }
       throw new HttpFailure('Paper changed while the PDF was uploading; retry from the current draft', 409)
     }
@@ -587,7 +590,7 @@ async function recordCleanupFailure(
         updated_at = datetime('now')`)
       .bind(storageKey, marker.sizeBytes, marker.reason, message.slice(0, 500)).run()
   } catch (queueError) {
-    console.error('Could not update the R2 cleanup queue', queueError)
+    console.error('Could not update the PDF cleanup queue', queueError)
   }
 }
 
@@ -602,7 +605,7 @@ async function cleanupStoredObject(env: Env, storageKey: string, marker: Cleanup
   try {
     await env.DB.prepare('DELETE FROM r2_cleanup_queue WHERE storage_key = ?').bind(storageKey).run()
   } catch (error) {
-    console.error('Removed an R2 object but could not clear its cleanup marker', error)
+    console.error('Removed a PDF object but could not clear its cleanup marker', error)
     return false
   }
   return true

@@ -16,7 +16,7 @@ function plainRows<T extends Record<string, unknown>>(rows: T[]): T[] {
 }
 
 describe('D1 migration upgrades', () => {
-  it('preserves v1 data and applies taxonomy, upload constraints, and R2 cleanup triggers', () => {
+  it('preserves v1 data and applies taxonomy, upload constraints, and durable cleanup triggers', () => {
     const database = new DatabaseSync(':memory:');
 
     try {

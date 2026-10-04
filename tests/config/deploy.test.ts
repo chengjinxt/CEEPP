@@ -13,15 +13,19 @@ describe('production deployment gate', () => {
     expect(config.d1_databases[0].database_id).toBe('336ace7b-b8bf-49fe-9e1e-673822d49e7e');
   });
 
-  it('binds uploaded papers to a dedicated private R2 bucket', () => {
+  it('binds uploaded papers to a dedicated KV namespace without any R2 binding', () => {
     const config = JSON.parse(readFileSync(new URL('../../wrangler.jsonc', import.meta.url), 'utf8')) as {
+      kv_namespaces?: Array<{ binding: string; id: string }>;
       r2_buckets?: Array<{ binding: string; bucket_name: string }>;
     };
 
-    expect(config.r2_buckets).toEqual([{ binding: 'PAPER_FILES', bucket_name: 'ceepp-papers' }]);
+    expect(config.kv_namespaces).toHaveLength(1);
+    expect(config.kv_namespaces?.[0]).toMatchObject({ binding: 'PAPER_FILES' });
+    expect(config.kv_namespaces?.[0].id).toBe('18332fafefe24709aa6cc132a3dc18a0');
+    expect(config.r2_buckets).toBeUndefined();
   });
 
-  it('runs a daily retry for uploaded objects awaiting R2 cleanup', () => {
+  it('runs a daily retry for uploaded objects awaiting KV cleanup', () => {
     const config = JSON.parse(readFileSync(new URL('../../wrangler.jsonc', import.meta.url), 'utf8')) as {
       triggers?: { crons?: string[] };
     };
