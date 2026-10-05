@@ -1,8 +1,6 @@
-name: Collect exam candidates
+name: Collect exam candidates manually
 
 on:
-  schedule:
-    - cron: '17 2 * * 1'
   workflow_dispatch:
 
 permissions:

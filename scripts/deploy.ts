@@ -14,7 +14,7 @@ export async function runDeployment(context: DeployContext, run: WranglerRunner)
     throw new Error('Production deployment is allowed only from main.');
   }
 
-  await run(['d1', 'migrations', 'apply', 'ceepp', '--remote']);
+  await run(['d1', 'migrations', 'apply', 'ceepp', '--remote', '--config', 'apps/worker/wrangler.jsonc']);
   await run(['deploy']);
 }
 

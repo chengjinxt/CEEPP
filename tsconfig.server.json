@@ -4,5 +4,14 @@
     "lib": ["ES2022", "DOM", "WebWorker"],
     "types": ["@cloudflare/workers-types", "node", "vitest/globals"]
   },
-  "include": ["src/server/**/*.ts", "src/crawl/**/*.ts", "scripts/**/*.ts", "tests/server/**/*.ts", "tests/crawl/**/*.ts", "tests/config/**/*.ts", "vitest.worker.config.ts"]
+  "include": [
+    "apps/worker/src/**/*.ts",
+    "apps/worker/tests/**/*.ts",
+    "apps/crawler/src/**/*.ts",
+    "apps/crawler/tests/**/*.ts",
+    "packages/shared/src/**/*.ts",
+    "scripts/**/*.ts",
+    "tests/config/**/*.ts",
+    "vitest.worker.config.ts"
+  ]
 }

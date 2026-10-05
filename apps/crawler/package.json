@@ -1,0 +1,9 @@
+{
+  "name": "@ceepp/crawler",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ceepp/shared": "workspace:*",
+    "cheerio": "^1.1.2"
+  }
+}

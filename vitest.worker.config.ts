@@ -8,15 +8,15 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   plugins: [
     cloudflareTest(async () => ({
-      wrangler: { configPath: path.join(projectRoot, 'wrangler.jsonc') },
+      wrangler: { configPath: path.join(projectRoot, 'apps/worker/wrangler.jsonc') },
       miniflare: {
         bindings: {
-          TEST_MIGRATIONS: await readD1Migrations(path.join(projectRoot, 'migrations')),
+          TEST_MIGRATIONS: await readD1Migrations(path.join(projectRoot, 'apps/worker/migrations')),
         },
       },
     })),
   ],
   test: {
-    include: ['tests/server/**/*.test.ts'],
+    include: ['apps/worker/tests/**/*.test.ts'],
   },
 });

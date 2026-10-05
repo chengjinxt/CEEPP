@@ -1,0 +1,9 @@
+{
+  "name": "@ceepp/worker",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ceepp/shared": "workspace:*",
+    "jose": "^6.1.0"
+  }
+}

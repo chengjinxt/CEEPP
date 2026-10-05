@@ -1,0 +1,30 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "ceepp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-03",
+  "workers_dev": true,
+  "keep_vars": true,
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/admin", "/admin/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ceepp",
+      "database_id": "336ace7b-b8bf-49fe-9e1e-673822d49e7e",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "PAPER_FILES",
+      "id": "18332fafefe24709aa6cc132a3dc18a0"
+    }
+  ],
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  }
+}

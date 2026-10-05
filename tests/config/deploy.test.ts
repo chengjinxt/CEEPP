@@ -3,8 +3,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { runDeployment } from '../../scripts/deploy';
 
 describe('production deployment gate', () => {
+  it('keeps candidate collection manual instead of scheduling recurring runs', () => {
+    const workflow = readFileSync(new URL('../../.github/workflows/crawl.yml', import.meta.url), 'utf8');
+
+    expect(workflow).toContain('workflow_dispatch:');
+    expect(workflow).not.toMatch(/^\s*schedule:/m);
+  });
+
   it('binds the production Worker to a provisioned D1 database', () => {
-    const config = JSON.parse(readFileSync(new URL('../../wrangler.jsonc', import.meta.url), 'utf8')) as {
+    const config = JSON.parse(readFileSync(new URL('../../apps/worker/wrangler.jsonc', import.meta.url), 'utf8')) as {
       d1_databases: Array<{ binding: string; database_name: string; database_id: string }>;
     };
 
@@ -14,7 +21,7 @@ describe('production deployment gate', () => {
   });
 
   it('binds uploaded papers to a dedicated KV namespace without any R2 binding', () => {
-    const config = JSON.parse(readFileSync(new URL('../../wrangler.jsonc', import.meta.url), 'utf8')) as {
+    const config = JSON.parse(readFileSync(new URL('../../apps/worker/wrangler.jsonc', import.meta.url), 'utf8')) as {
       kv_namespaces?: Array<{ binding: string; id: string }>;
       r2_buckets?: Array<{ binding: string; bucket_name: string }>;
     };
@@ -26,7 +33,7 @@ describe('production deployment gate', () => {
   });
 
   it('runs a daily retry for uploaded objects awaiting KV cleanup', () => {
-    const config = JSON.parse(readFileSync(new URL('../../wrangler.jsonc', import.meta.url), 'utf8')) as {
+    const config = JSON.parse(readFileSync(new URL('../../apps/worker/wrangler.jsonc', import.meta.url), 'utf8')) as {
       triggers?: { crons?: string[] };
     };
 
@@ -62,7 +69,7 @@ describe('production deployment gate', () => {
     await runDeployment({ workersCi: true, branch: 'main' }, run);
 
     expect(run.mock.calls).toEqual([
-      [['d1', 'migrations', 'apply', 'ceepp', '--remote']],
+      [['d1', 'migrations', 'apply', 'ceepp', '--remote', '--config', 'apps/worker/wrangler.jsonc']],
       [['deploy']],
     ]);
   });
@@ -74,6 +81,6 @@ describe('production deployment gate', () => {
 
     await expect(runDeployment({ workersCi: true, branch: 'main' }, run))
       .rejects.toThrow('migration failed');
-    expect(run.mock.calls).toEqual([[['d1', 'migrations', 'apply', 'ceepp', '--remote']]]);
+    expect(run.mock.calls).toEqual([[['d1', 'migrations', 'apply', 'ceepp', '--remote', '--config', 'apps/worker/wrangler.jsonc']]]);
   });
 });

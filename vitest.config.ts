@@ -4,6 +4,6 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   plugins: [vue()],
   test: {
-    include: ['tests/client/**/*.test.ts', 'tests/crawl/**/*.test.ts', 'tests/config/**/*.test.ts'],
+    include: ['apps/web/tests/**/*.test.ts', 'apps/crawler/tests/**/*.test.ts', 'tests/config/**/*.test.ts'],
   },
 });

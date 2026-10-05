@@ -1,0 +1,9 @@
+{
+  "name": "@ceepp/shared",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./api": "./src/api.ts",
+    "./exam": "./src/exam.ts"
+  }
+}

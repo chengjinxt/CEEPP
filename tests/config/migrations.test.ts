@@ -3,11 +3,11 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 
 const initialMigration = readFileSync(
-  new URL('../../migrations/0001_init.sql', import.meta.url),
+  new URL('../../apps/worker/migrations/0001_init.sql', import.meta.url),
   'utf8',
 );
 const taxonomyAndUploadsMigration = readFileSync(
-  new URL('../../migrations/0002_taxonomy_and_uploads.sql', import.meta.url),
+  new URL('../../apps/worker/migrations/0002_taxonomy_and_uploads.sql', import.meta.url),
   'utf8',
 );
 
