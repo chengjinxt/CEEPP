@@ -91,9 +91,9 @@ Namespace ID 是资源标识，不是凭据，可以写入 [`apps/worker/wrangle
 | Build variable `PNPM_VERSION` | `11.19.0` |
 | Preview branches/builds | 关闭；首期不部署其他分支 |
 
-Workers Builds 会自动安装依赖，不需要在 Build command 中重复执行 `pnpm install`。Cloudflare 的构建镜像默认 pnpm 版本可能与仓库 `packageManager` 不同，因此显式指定 `PNPM_VERSION`；[构建镜像文档](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/)列出了可覆盖的工具版本。`pnpm build` 通过 Cloudflare Vite 插件生成发布所需的 Wrangler 配置；随后的 `wrangler deploy` 会使用这份构建产物配置，而非把源码目录当成静态站点直接上传。[Vite 插件说明](https://developers.cloudflare.com/workers/vite-plugin/tutorial/)
+Workers Builds 会自动安装依赖，不需要在 Build command 中重复执行 `pnpm install`。Cloudflare 的构建镜像默认 pnpm 版本可能与仓库 `packageManager` 不同，因此显式指定 `PNPM_VERSION`；[构建镜像文档](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/)列出了可覆盖的工具版本。`pnpm build` 通过 Cloudflare Vite 插件生成 `dist/ceepp/wrangler.json`；部署脚本必须显式使用这份构建产物配置，而非让 Wrangler 在 pnpm workspace 根目录自动猜测项目，也不能把源码目录当成静态站点直接上传。[Vite 插件说明](https://developers.cloudflare.com/workers/vite-plugin/tutorial/)
 
-生产部署脚本 [`scripts/deploy.ts`](../scripts/deploy.ts) 检查 `WORKERS_CI_BRANCH === 'main'`，再依次执行 `wrangler d1 migrations apply ceepp --remote --config apps/worker/wrangler.jsonc` 和 `wrangler deploy`；迁移失败即停止发布。不要把非生产分支的 Preview command 改成 `pnpm deploy`。由于预览绑定同一个 D1 ID 时可能共享生产数据，首期直接关闭 Preview；以后需要预览时先配独立 D1。[Workers Builds 分支控制](https://developers.cloudflare.com/workers/ci-cd/builds/build-branches/)、[预览资源隔离](https://developers.cloudflare.com/workers/previews/resources/)
+生产部署脚本 [`scripts/deploy.ts`](../scripts/deploy.ts) 检查 `WORKERS_CI_BRANCH === 'main'`，再依次执行 `wrangler d1 migrations apply ceepp --remote --config apps/worker/wrangler.jsonc` 和 `wrangler deploy --config dist/ceepp/wrangler.json`；迁移失败即停止发布。不要省略第二条命令的 `--config`，否则 Wrangler 会在 workspace 根目录报无法确定具体 Cloudflare application。不要把非生产分支的 Preview command 改成 `pnpm deploy`。由于预览绑定同一个 D1 ID 时可能共享生产数据，首期直接关闭 Preview；以后需要预览时先配独立 D1。[Workers Builds 分支控制](https://developers.cloudflare.com/workers/ci-cd/builds/build-branches/)、[预览资源隔离](https://developers.cloudflare.com/workers/previews/resources/)
 
 ### 配置 Builds API token
 
@@ -179,6 +179,7 @@ Cloudflare 自动生成的 Builds token 默认包含多项产品权限，不能�
 | GitHub App 已安装，但连接按钮只打开 App 设置页 | 账号连接可能未完成；核查其他项目影响后，按上文排障流程从 Cloudflare 重新发起安装与授权。 |
 | 首次构建找不到 Worker 或名称不符 | Worker 名与 `apps/worker/wrangler.jsonc` 的 `name` 是否都是 `ceepp`；Build 根目录是否为 `/`。 |
 | `pnpm` 或 Node 版本不符 | Build variables 中 `NODE_VERSION=24`、`PNPM_VERSION=11.19.0`；检查 Builds 安装依赖阶段日志。 |
+| Deploy 报 `application detection ... root of a workspace` | `pnpm build` 已成功但部署没有指定项目；确认 [`scripts/deploy.ts`](../scripts/deploy.ts) 执行 `wrangler deploy --config dist/ceepp/wrangler.json`，不要改回裸 `wrangler deploy`。 |
 | D1 migration 报无数据库或权限不足 | 核对 `database_id`、账号及 Builds 的**用户级** token 是否有 D1 Edit；修正后重试构建，不要跳过迁移。 |
 | Deploy 报 KV namespace 不存在、无权限或 binding 失败 | 核对 `ceepp-paper-files` 是否已存在于部署所用账号、其 ID 是否与 `apps/worker/wrangler.jsonc` 一致，并确认 Builds token 保留 Workers Scripts Edit 与 D1 Edit。绑定既有 namespace 不需要 Workers KV Storage Edit；只有通过 token 创建 namespace 或由 CI 直接执行 KV 运维时才临时添加该权限。不要临时删除 binding 绕过发布。 |
 | 后台上传返回 400 / 413 / 415 / 507 | 400：扩展名、实际文件头或声明大小不匹配；413：文件超过 20 MiB；415：普通资料不是 `application/pdf`，或“听力音频”不是 `audio/mpeg`；507：本站 D1 已登记文件与待清理对象达到 900 MiB 软限制。该统计不包含账号内其他 KV 占用；即使尚未达到 900 MiB，其他 namespace 或 KV 数据也可能先耗尽账号合计 1 GB 额度。先核查文件和账号级 KV/D1 用量，不要提高限制绕过免费额度保护。 |

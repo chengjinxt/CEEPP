@@ -15,7 +15,7 @@ export async function runDeployment(context: DeployContext, run: WranglerRunner)
   }
 
   await run(['d1', 'migrations', 'apply', 'ceepp', '--remote', '--config', 'apps/worker/wrangler.jsonc']);
-  await run(['deploy']);
+  await run(['deploy', '--config', 'dist/ceepp/wrangler.json']);
 }
 
 async function runWrangler(args: string[]): Promise<void> {

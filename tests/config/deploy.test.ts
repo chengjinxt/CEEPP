@@ -70,7 +70,7 @@ describe('production deployment gate', () => {
 
     expect(run.mock.calls).toEqual([
       [['d1', 'migrations', 'apply', 'ceepp', '--remote', '--config', 'apps/worker/wrangler.jsonc']],
-      [['deploy']],
+      [['deploy', '--config', 'dist/ceepp/wrangler.json']],
     ]);
   });
 
